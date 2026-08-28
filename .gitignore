@@ -115,3 +115,8 @@ InitTestScene*.unity*
 
 # Skills
 /[Ss]kills
+
+# FBX
+/[Aa]ssets/FBX
+/[Aa]ssets/FBX.meta
+/[Aa]ssets/FBXCache
