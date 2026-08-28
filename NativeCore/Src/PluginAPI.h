@@ -23,4 +23,7 @@ extern "C" {
     
     // 유니티 렌더러에서 카메라 정보를 넘겨줌
     ENDFIELD_API void UpdateCameraState(float* viewMatrix, float* projMatrix);
+
+    // 유니티 에디터 스크립트에서 익스포트한 씬 바이너리를 C++ 네이티브로 로드
+    ENDFIELD_API void LoadNativeScene(const char* path);
 }

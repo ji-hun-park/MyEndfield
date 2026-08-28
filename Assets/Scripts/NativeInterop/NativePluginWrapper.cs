@@ -23,5 +23,8 @@ namespace Endfield.NativeInterop
 
         [DllImport(pluginName)]
         public static extern void RegisterEntity(uint id, IntPtr transformData);
+
+        [DllImport(pluginName, CharSet = CharSet.Ansi)]
+        public static extern void LoadNativeScene(string path);
     }
 }

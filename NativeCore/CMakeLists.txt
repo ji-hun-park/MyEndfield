@@ -12,6 +12,8 @@ set(SOURCES
     Src/ECS.cpp
     Src/Culling.h
     Src/Culling.cpp
+    Src/SceneLoader.h
+    Src/SceneLoader.cpp
     Src/SortKey.h
     Src/RenderGraph.h
     Src/RenderGraph.cpp
