@@ -134,6 +134,64 @@ void VulkanBackend::SetupDebugMessenger()
     }
 }
 
+int VulkanBackend::ScoreDeviceSuitability(VkPhysicalDevice device)
+{
+    int score = 0;
+    VkPhysicalDeviceProperties deviceProperties;
+    vkGetPhysicalDeviceProperties(device, &deviceProperties);
+    
+    if (deviceProperties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
+        score += 5000;
+    }
+
+    uint32_t queueFamilyCount = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, nullptr);
+    std::vector<VkQueueFamilyProperties> queueFamilies(queueFamilyCount);
+    vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, queueFamilies.data());
+
+    bool hasGraphicsQueue = false;
+    bool hasPresentQueue = false;
+
+    for (uint32_t i = 0; i < queueFamilyCount; i++) {
+        if (queueFamilies[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
+            hasGraphicsQueue = true;
+        }
+
+        if (m_Surface != VK_NULL_HANDLE) {
+            VkBool32 presentSupport = false;
+            vkGetPhysicalDeviceSurfaceSupportKHR(device, i, m_Surface, &presentSupport);
+            if (presentSupport) {
+                hasPresentQueue = true;
+            }
+        } else {
+            hasPresentQueue = true;
+        }
+    }
+
+    if (hasGraphicsQueue) score += 500;
+    if (hasPresentQueue) score += 500;
+
+    uint32_t extensionCount;
+    vkEnumerateDeviceExtensionProperties(device, nullptr, &extensionCount, nullptr);
+    std::vector<VkExtensionProperties> availableExtensions(extensionCount);
+    vkEnumerateDeviceExtensionProperties(device, nullptr, &extensionCount, availableExtensions.data());
+
+    bool swapchainSupported = false;
+    for (const auto& extension : availableExtensions) {
+        if (std::string(extension.extensionName) == VK_KHR_SWAPCHAIN_EXTENSION_NAME) {
+            swapchainSupported = true;
+            break;
+        }
+    }
+    
+    if (swapchainSupported) {
+        score += 500;
+    }
+
+    LogToUnity("[VulkanBackend] GPU Found: " + std::string(deviceProperties.deviceName) + " (Score: " + std::to_string(score) + ")");
+    return score;
+}
+
 void VulkanBackend::SelectPhysicalDevice()
 {
     if (m_Instance == VK_NULL_HANDLE) return;
@@ -152,67 +210,7 @@ void VulkanBackend::SelectPhysicalDevice()
     int highestScore = -1;
 
     for (const auto& device : devices) {
-        int score = 0;
-
-        // 1. Device Type Check (Discrete GPU gets massive bonus)
-        VkPhysicalDeviceProperties deviceProperties;
-        vkGetPhysicalDeviceProperties(device, &deviceProperties);
-        if (deviceProperties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
-            score += 1000;
-        }
-
-        // Check Queue Families
-        uint32_t queueFamilyCount = 0;
-        vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, nullptr);
-        std::vector<VkQueueFamilyProperties> queueFamilies(queueFamilyCount);
-        vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, queueFamilies.data());
-
-        bool hasGraphicsQueue = false;
-        bool hasPresentQueue = false;
-
-        for (uint32_t i = 0; i < queueFamilyCount; i++) {
-            // 2. Graphics Queue Support
-            if (queueFamilies[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
-                hasGraphicsQueue = true;
-            }
-
-            // 3. Present Queue Support
-            if (m_Surface != VK_NULL_HANDLE) {
-                VkBool32 presentSupport = false;
-                vkGetPhysicalDeviceSurfaceSupportKHR(device, i, m_Surface, &presentSupport);
-                if (presentSupport) {
-                    hasPresentQueue = true;
-                }
-            } else {
-                hasPresentQueue = true; // No surface to check against
-            }
-        }
-
-        if (hasGraphicsQueue) score += 500;
-        if (hasPresentQueue) score += 500;
-
-        // 4. Required Extension Support (e.g., Swapchain)
-        uint32_t extensionCount;
-        vkEnumerateDeviceExtensionProperties(device, nullptr, &extensionCount, nullptr);
-        std::vector<VkExtensionProperties> availableExtensions(extensionCount);
-        vkEnumerateDeviceExtensionProperties(device, nullptr, &extensionCount, availableExtensions.data());
-
-        bool swapchainSupported = false;
-        for (const auto& extension : availableExtensions) {
-            if (std::string(extension.extensionName) == VK_KHR_SWAPCHAIN_EXTENSION_NAME) {
-                swapchainSupported = true;
-                break;
-            }
-        }
-        
-        if (swapchainSupported) {
-            score += 500;
-        }
-
-        // Output score to log for debugging
-        LogToUnity("[VulkanBackend] GPU Found: " + std::string(deviceProperties.deviceName) + " (Score: " + std::to_string(score) + ")");
-
-        // Evaluate Best GPU
+        int score = ScoreDeviceSuitability(device);
         if (score > highestScore) {
             highestScore = score;
             bestDevice = device;
@@ -327,11 +325,65 @@ void VulkanBackend::CreateCommandObjects()
 
 void VulkanBackend::CreateSwapchain()
 {
+VkSurfaceFormatKHR VulkanBackend::ChooseSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats) {
+    for (const auto& availableFormat : availableFormats) {
+        if (availableFormat.format == VK_FORMAT_B8G8R8A8_SRGB && availableFormat.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+            return availableFormat;
+        }
+    }
+    return availableFormats[0];
+}
+
+VkPresentModeKHR VulkanBackend::ChooseSwapPresentMode(const std::vector<VkPresentModeKHR>& availablePresentModes) {
+    for (const auto& availablePresentMode : availablePresentModes) {
+        if (availablePresentMode == VK_PRESENT_MODE_MAILBOX_KHR) {
+            return availablePresentMode;
+        }
+    }
+    return VK_PRESENT_MODE_FIFO_KHR;
+}
+
+VkExtent2D VulkanBackend::ChooseSwapExtent(const VkSurfaceCapabilitiesKHR& capabilities) {
+    if (capabilities.currentExtent.width != UINT32_MAX) {
+        return capabilities.currentExtent;
+    } else {
+        VkExtent2D extent = { 1280, 720 }; 
+        extent.width = std::clamp(extent.width, capabilities.minImageExtent.width, capabilities.maxImageExtent.width);
+        extent.height = std::clamp(extent.height, capabilities.minImageExtent.height, capabilities.maxImageExtent.height);
+        return extent;
+    }
+}
+
+void VulkanBackend::CreateSwapchainImageViews() {
+    m_SwapchainImageViews.resize(m_SwapchainImages.size());
+    for (size_t i = 0; i < m_SwapchainImages.size(); i++) {
+        VkImageViewCreateInfo viewInfo{};
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image = m_SwapchainImages[i];
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format = m_SwapchainImageFormat;
+        viewInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
+        viewInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
+        viewInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
+        viewInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
+        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        viewInfo.subresourceRange.baseMipLevel = 0;
+        viewInfo.subresourceRange.levelCount = 1;
+        viewInfo.subresourceRange.baseArrayLayer = 0;
+        viewInfo.subresourceRange.layerCount = 1;
+
+        if (vkCreateImageView(m_Device, &viewInfo, nullptr, &m_SwapchainImageViews[i]) != VK_SUCCESS) {
+            LogToUnity("[VulkanBackend ERROR] Failed to create image views!");
+        }
+    }
+}
+
+void VulkanBackend::CreateSwapchain()
+{
     if (m_Device == VK_NULL_HANDLE || m_PhysicalDevice == VK_NULL_HANDLE || m_Surface == VK_NULL_HANDLE) {
         return;
     }
 
-    // 1. Query Surface Capabilities
     VkSurfaceCapabilitiesKHR capabilities;
     vkGetPhysicalDeviceSurfaceCapabilitiesKHR(m_PhysicalDevice, m_Surface, &capabilities);
 
@@ -354,36 +406,10 @@ void VulkanBackend::CreateSwapchain()
         return;
     }
 
-    // 2. Choose Format (Prefer B8G8R8A8_SRGB)
-    VkSurfaceFormatKHR surfaceFormat = formats[0];
-    for (const auto& availableFormat : formats) {
-        if (availableFormat.format == VK_FORMAT_B8G8R8A8_SRGB && availableFormat.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
-            surfaceFormat = availableFormat;
-            break;
-        }
-    }
+    VkSurfaceFormatKHR surfaceFormat = ChooseSwapSurfaceFormat(formats);
+    VkPresentModeKHR presentMode = ChooseSwapPresentMode(presentModes);
+    VkExtent2D extent = ChooseSwapExtent(capabilities);
 
-    // 3. Choose Present Mode (Prefer Mailbox for triple buffering, else FIFO)
-    VkPresentModeKHR presentMode = VK_PRESENT_MODE_FIFO_KHR;
-    for (const auto& availablePresentMode : presentModes) {
-        if (availablePresentMode == VK_PRESENT_MODE_MAILBOX_KHR) {
-            presentMode = availablePresentMode;
-            break;
-        }
-    }
-
-    // 4. Choose Extent (Resolution)
-    VkExtent2D extent;
-    if (capabilities.currentExtent.width != UINT32_MAX) {
-        extent = capabilities.currentExtent;
-    } else {
-        // Fallback or arbitrary size if window manager allows free size
-        extent = { 1280, 720 }; 
-        extent.width = std::clamp(extent.width, capabilities.minImageExtent.width, capabilities.maxImageExtent.width);
-        extent.height = std::clamp(extent.height, capabilities.minImageExtent.height, capabilities.maxImageExtent.height);
-    }
-
-    // 5. Image Count (min + 1 for double/triple buffering)
     uint32_t imageCount = capabilities.minImageCount + 1;
     if (capabilities.maxImageCount > 0 && imageCount > capabilities.maxImageCount) {
         imageCount = capabilities.maxImageCount;
@@ -399,7 +425,6 @@ void VulkanBackend::CreateSwapchain()
     createInfo.imageArrayLayers = 1;
     createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 
-    // Handle separate queue families
     uint32_t queueFamilyIndices[] = { m_GraphicsQueueFamilyIndex, m_PresentQueueFamilyIndex };
     if (m_GraphicsQueueFamilyIndex != m_PresentQueueFamilyIndex) {
         createInfo.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
@@ -420,7 +445,6 @@ void VulkanBackend::CreateSwapchain()
         return;
     }
 
-    // Retrieve Images
     vkGetSwapchainImagesKHR(m_Device, m_Swapchain, &imageCount, nullptr);
     m_SwapchainImages.resize(imageCount);
     vkGetSwapchainImagesKHR(m_Device, m_Swapchain, &imageCount, m_SwapchainImages.data());
@@ -428,28 +452,7 @@ void VulkanBackend::CreateSwapchain()
     m_SwapchainImageFormat = surfaceFormat.format;
     m_SwapchainExtent = extent;
 
-    // Create Image Views
-    m_SwapchainImageViews.resize(m_SwapchainImages.size());
-    for (size_t i = 0; i < m_SwapchainImages.size(); i++) {
-        VkImageViewCreateInfo viewInfo{};
-        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        viewInfo.image = m_SwapchainImages[i];
-        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        viewInfo.format = m_SwapchainImageFormat;
-        viewInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
-        viewInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
-        viewInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
-        viewInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
-        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        viewInfo.subresourceRange.baseMipLevel = 0;
-        viewInfo.subresourceRange.levelCount = 1;
-        viewInfo.subresourceRange.baseArrayLayer = 0;
-        viewInfo.subresourceRange.layerCount = 1;
-
-        if (vkCreateImageView(m_Device, &viewInfo, nullptr, &m_SwapchainImageViews[i]) != VK_SUCCESS) {
-            LogToUnity("[VulkanBackend ERROR] Failed to create image views!");
-        }
-    }
+    CreateSwapchainImageViews();
 
     LogToUnity("[VulkanBackend] Swapchain and Image Views successfully created. (Count: " + std::to_string(imageCount) + ")");
 }
@@ -561,11 +564,48 @@ VkShaderModule VulkanBackend::CreateShaderModule(const std::vector<char>& code) 
     return shaderModule;
 }
 
+VkPipelineShaderStageCreateInfo VulkanBackend::CreateShaderStageInfo(VkShaderStageFlagBits stage, VkShaderModule module) {
+    VkPipelineShaderStageCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    info.stage = stage;
+    info.module = module;
+    info.pName = "main";
+    return info;
+}
+
+VkPipelineVertexInputStateCreateInfo VulkanBackend::CreateVertexInputStateInfo() {
+    VkPipelineVertexInputStateCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    info.vertexBindingDescriptionCount = 0;
+    info.vertexAttributeDescriptionCount = 0;
+    return info;
+}
+
+VkPipelineInputAssemblyStateCreateInfo VulkanBackend::CreateInputAssemblyStateInfo() {
+    VkPipelineInputAssemblyStateCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    info.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    info.primitiveRestartEnable = VK_FALSE;
+    return info;
+}
+
+VkPipelineRasterizationStateCreateInfo VulkanBackend::CreateRasterizationStateInfo() {
+    VkPipelineRasterizationStateCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    info.depthClampEnable = VK_FALSE;
+    info.rasterizerDiscardEnable = VK_FALSE;
+    info.polygonMode = VK_POLYGON_MODE_FILL;
+    info.lineWidth = 1.0f;
+    info.cullMode = VK_CULL_MODE_BACK_BIT;
+    info.frontFace = VK_FRONT_FACE_CLOCKWISE;
+    info.depthBiasEnable = VK_FALSE;
+    return info;
+}
+
 void VulkanBackend::CreateGraphicsPipeline()
 {
     if (m_Device == VK_NULL_HANDLE || m_RenderPass == VK_NULL_HANDLE) return;
 
-    // Load shaders (ensure vert.spv and frag.spv are in the working directory)
     auto vertShaderCode = ReadFile("vert.spv");
     auto fragShaderCode = ReadFile("frag.spv");
     
@@ -577,56 +617,26 @@ void VulkanBackend::CreateGraphicsPipeline()
     VkShaderModule vertShaderModule = CreateShaderModule(vertShaderCode);
     VkShaderModule fragShaderModule = CreateShaderModule(fragShaderCode);
 
-    VkPipelineShaderStageCreateInfo vertShaderStageInfo{};
-    vertShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    vertShaderStageInfo.stage = VK_SHADER_STAGE_VERTEX_BIT;
-    vertShaderStageInfo.module = vertShaderModule;
-    vertShaderStageInfo.pName = "main";
+    VkPipelineShaderStageCreateInfo shaderStages[] = {
+        CreateShaderStageInfo(VK_SHADER_STAGE_VERTEX_BIT, vertShaderModule),
+        CreateShaderStageInfo(VK_SHADER_STAGE_FRAGMENT_BIT, fragShaderModule)
+    };
 
-    VkPipelineShaderStageCreateInfo fragShaderStageInfo{};
-    fragShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    fragShaderStageInfo.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-    fragShaderStageInfo.module = fragShaderModule;
-    fragShaderStageInfo.pName = "main";
-
-    VkPipelineShaderStageCreateInfo shaderStages[] = {vertShaderStageInfo, fragShaderStageInfo};
-
-    // Vertex Input (Empty for now, assuming hardcoded triangle in shader)
-    VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
-    vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    vertexInputInfo.vertexBindingDescriptionCount = 0;
-    vertexInputInfo.vertexAttributeDescriptionCount = 0;
-
-    // Input Assembly
-    VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
-    inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-    inputAssembly.primitiveRestartEnable = VK_FALSE;
-
-    // Viewport and Scissor (Dynamic)
+    VkPipelineVertexInputStateCreateInfo vertexInputInfo = CreateVertexInputStateInfo();
+    VkPipelineInputAssemblyStateCreateInfo inputAssembly = CreateInputAssemblyStateInfo();
+    
     VkPipelineViewportStateCreateInfo viewportState{};
     viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
     viewportState.viewportCount = 1;
     viewportState.scissorCount = 1;
 
-    // Rasterizer
-    VkPipelineRasterizationStateCreateInfo rasterizer{};
-    rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-    rasterizer.depthClampEnable = VK_FALSE;
-    rasterizer.rasterizerDiscardEnable = VK_FALSE;
-    rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
-    rasterizer.lineWidth = 1.0f;
-    rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
-    rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
-    rasterizer.depthBiasEnable = VK_FALSE;
+    VkPipelineRasterizationStateCreateInfo rasterizer = CreateRasterizationStateInfo();
 
-    // Multisampling
     VkPipelineMultisampleStateCreateInfo multisampling{};
     multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
     multisampling.sampleShadingEnable = VK_FALSE;
     multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
 
-    // Color Blending
     VkPipelineColorBlendAttachmentState colorBlendAttachment{};
     colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
     colorBlendAttachment.blendEnable = VK_FALSE;
@@ -637,18 +647,12 @@ void VulkanBackend::CreateGraphicsPipeline()
     colorBlending.attachmentCount = 1;
     colorBlending.pAttachments = &colorBlendAttachment;
 
-    // Dynamic State
-    std::vector<VkDynamicState> dynamicStates = {
-        VK_DYNAMIC_STATE_VIEWPORT,
-        VK_DYNAMIC_STATE_SCISSOR
-    };
+    std::vector<VkDynamicState> dynamicStates = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
     VkPipelineDynamicStateCreateInfo dynamicState{};
     dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
     dynamicState.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
     dynamicState.pDynamicStates = dynamicStates.data();
 
-    // Pipeline Layout (Endfield spec: Set 0 = Pass, Set 1 = Material, Set 2 = Object)
-    // We'll create an empty one here just to have it, but for a real engine we'd define the descriptors.
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     pipelineLayoutInfo.setLayoutCount = 0;
@@ -658,7 +662,6 @@ void VulkanBackend::CreateGraphicsPipeline()
         LogToUnity("[VulkanBackend ERROR] Failed to create pipeline layout!");
     }
 
-    // Create the Pipeline
     VkGraphicsPipelineCreateInfo pipelineInfo{};
     pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
     pipelineInfo.stageCount = 2;
@@ -681,7 +684,6 @@ void VulkanBackend::CreateGraphicsPipeline()
         LogToUnity("[VulkanBackend] Graphics Pipeline successfully created.");
     }
 
-    // Cleanup shader modules after pipeline creation
     vkDestroyShaderModule(m_Device, fragShaderModule, nullptr);
     vkDestroyShaderModule(m_Device, vertShaderModule, nullptr);
 }
@@ -786,28 +788,26 @@ void VulkanBackend::Shutdown()
 
 void VulkanBackend::SetupRenderGraph()
 {
-    RenderGraph graph;
-
     // 1. Declare resources
-    graph.AddResource("GBufferColor", true, AccessTag::None);
-    graph.AddResource("GBufferDepth", true, AccessTag::None);
-    graph.AddResource("ShadowMap", false, AccessTag::None);
+    m_RenderGraph.AddResource("GBufferColor", true, AccessTag::None);
+    m_RenderGraph.AddResource("GBufferDepth", true, AccessTag::None);
+    m_RenderGraph.AddResource("ShadowMap", false, AccessTag::None);
 
     // 2. Declare passes and their resource accesses
-    graph.AddPass("ShadowPass");
-    graph.DeclarePassAccess("ShadowPass", "ShadowMap", AccessTag::DepthStencilWrite);
+    m_RenderGraph.AddPass("ShadowPass");
+    m_RenderGraph.DeclarePassAccess("ShadowPass", "ShadowMap", AccessTag::DepthStencilWrite);
 
-    graph.AddPass("OpaquePass");
-    graph.DeclarePassAccess("OpaquePass", "GBufferColor", AccessTag::ColorAttachmentWrite);
-    graph.DeclarePassAccess("OpaquePass", "GBufferDepth", AccessTag::DepthStencilWrite);
-    graph.DeclarePassAccess("OpaquePass", "ShadowMap", AccessTag::ShaderRead); // Needs transition!
+    m_RenderGraph.AddPass("OpaquePass");
+    m_RenderGraph.DeclarePassAccess("OpaquePass", "GBufferColor", AccessTag::ColorAttachmentWrite);
+    m_RenderGraph.DeclarePassAccess("OpaquePass", "GBufferDepth", AccessTag::DepthStencilWrite);
+    m_RenderGraph.DeclarePassAccess("OpaquePass", "ShadowMap", AccessTag::ShaderRead); // Needs transition!
 
-    graph.AddPass("LightingPass");
-    graph.DeclarePassAccess("LightingPass", "GBufferColor", AccessTag::ShaderRead); // Needs transition!
-    graph.DeclarePassAccess("LightingPass", "GBufferDepth", AccessTag::ShaderRead); // Needs transition!
+    m_RenderGraph.AddPass("LightingPass");
+    m_RenderGraph.DeclarePassAccess("LightingPass", "GBufferColor", AccessTag::ShaderRead); // Needs transition!
+    m_RenderGraph.DeclarePassAccess("LightingPass", "GBufferDepth", AccessTag::ShaderRead); // Needs transition!
 
     // 3. Compile the graph to merge barriers
-    graph.CompileGraph();
+    m_RenderGraph.CompileGraph();
 
     // The merged barriers would now be used to generate explicit vkCmdPipelineBarrier calls
     // exactly at the boundaries between passes.

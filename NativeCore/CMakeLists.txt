@@ -10,7 +10,9 @@ set(SOURCES
     Src/Culling.h
     Src/SortKey.h
     Src/RenderGraph.h
+    Src/RenderGraph.cpp
     Src/VulkanBackend.h
+    Src/VulkanBackend.cpp
 )
 
 # Shared library for Unity Plugin
