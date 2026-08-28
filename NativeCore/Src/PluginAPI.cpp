@@ -6,7 +6,7 @@
 #include <memory>
 #include <iostream>
 
-static std::unique_ptr<VulkanBackend> g_Backend = nullptr;
+static std::unique_ptr<Endfield::VulkanBackend> g_Backend = nullptr;
 static std::unique_ptr<Endfield::ECSManager> g_ECS = nullptr;
 static std::unique_ptr<Endfield::CullingSystem> g_Culling = nullptr;
 
@@ -15,7 +15,7 @@ extern "C" {
 ENDFIELD_API void InitializeVulkanRenderer(void* windowHandle, uint32_t width, uint32_t height)
 {
     if (!g_Backend) {
-        g_Backend = std::make_unique<VulkanBackend>();
+        g_Backend = std::make_unique<Endfield::VulkanBackend>();
         g_Backend->Initialize(windowHandle);
         g_Backend->SetupRenderGraph();
     }

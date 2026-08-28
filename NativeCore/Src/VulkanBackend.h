@@ -10,7 +10,7 @@
 #include "RenderGraph.h"
 #include "SortKey.h"
 
-using namespace Endfield;
+namespace Endfield {
 
 class VulkanBackend
 {
@@ -107,3 +107,5 @@ private:
 
     RenderGraph m_RenderGraph;
 };
+
+} // namespace Endfield

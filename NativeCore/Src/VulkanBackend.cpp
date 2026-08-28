@@ -1,11 +1,15 @@
 #include "VulkanBackend.h"
 #include "RenderGraph.h"
-#include <iostream>
-#include <string>
-#include <vector>
 #include <algorithm>
 #include <cstdint>
 #include <fstream>
+#include <iostream>
+#include <limits>
+#include <set>
+#include <string>
+#include <vector>
+
+namespace Endfield {
 
 static VulkanBackend::DebugLogFunc g_DebugCallback = nullptr;
 
@@ -988,3 +992,5 @@ void VulkanBackend::EndFrame()
 
     vkQueuePresentKHR(m_PresentQueue, &presentInfo);
 }
+
+} // namespace Endfield
