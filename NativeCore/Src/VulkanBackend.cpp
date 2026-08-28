@@ -813,6 +813,12 @@ void VulkanBackend::SetupRenderGraph()
     std::cout << "[VulkanBackend] Render Graph setup complete. Barriers merged at compile time.\n";
 }
 
+void VulkanBackend::UpdateCamera(float* viewMatrix, float* projMatrix)
+{
+    // 여기서 넘겨받은 카메라 행렬을 내부 데이터(Uniform Buffer 등)에 복사해 둡니다.
+    // 예를 들어 m_GlobalUniforms.view = *reinterpret_cast<Matrix4x4*>(viewMatrix);
+}
+
 void VulkanBackend::BeginFrame()
 {
     if (m_Device == VK_NULL_HANDLE || m_CommandBuffer == VK_NULL_HANDLE || m_Swapchain == VK_NULL_HANDLE) return;

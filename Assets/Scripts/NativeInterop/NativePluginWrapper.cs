@@ -19,6 +19,9 @@ namespace Endfield.NativeInterop
         public static extern void ExecuteNativeRenderLoop();
 
         [DllImport(pluginName)]
+        public static extern void UpdateCameraState(ref Matrix4x4 viewMatrix, ref Matrix4x4 projMatrix);
+
+        [DllImport(pluginName)]
         public static extern void RegisterEntity(uint id, IntPtr transformData);
     }
 }

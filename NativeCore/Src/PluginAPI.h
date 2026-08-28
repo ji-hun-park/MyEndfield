@@ -20,4 +20,7 @@ extern "C" {
     
     // ECS 데이터 브릿지 (트랜스폼, 렌더링 데이터 등을 C++ 측으로 넘김)
     ENDFIELD_API void RegisterEntity(uint32_t id, float* transformData);
+    
+    // 유니티 렌더러에서 카메라 정보를 넘겨줌
+    ENDFIELD_API void UpdateCameraState(float* viewMatrix, float* projMatrix);
 }

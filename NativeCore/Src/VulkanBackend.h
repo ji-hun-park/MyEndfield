@@ -29,6 +29,8 @@ public:
 
     void SetupRenderGraph();
 
+    void UpdateCamera(float* viewMatrix, float* projMatrix);
+
 private:
     void CreateInstance();
     void SetupDebugMessenger();

@@ -7,6 +7,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # Add source files
 set(SOURCES
     Src/PluginAPI.h
+    Src/PluginAPI.cpp
     Src/ECS.h
     Src/Culling.h
     Src/SortKey.h
