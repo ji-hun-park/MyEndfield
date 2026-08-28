@@ -22,8 +22,8 @@ namespace Endfield.NativeInterop
 
         private void Start()
         {
-            // 예시로 현재 씬에 있는 모든 렌더러를 찾아 네이티브에 등록합니다.
-            var renderers = FindObjectsOfType<MeshRenderer>();
+            // 예시로 현재 씬에 있는 모든 렌더러를 찾아 네이티브에 등록합니다. (Unity 6 호환 최신 API)
+            var renderers = FindObjectsByType<MeshRenderer>(FindObjectsInactive.Exclude);
             m_TransformDataArray = new NativeTransformData[renderers.Length];
 
             // Pinned GCHandle을 사용하여 C# 배열의 포인터를 C++로 안전하게 넘깁니다.

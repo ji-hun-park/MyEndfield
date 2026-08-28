@@ -13,29 +13,42 @@ namespace Endfield.NativeInterop
         {
             private bool m_Initialized = false;
 
-            public override void Execute(ScriptableRenderContext context, ref RenderingData renderingData)
+            class PassData { }
+
+            public override void RecordRenderGraph(UnityEngine.Rendering.RenderGraphModule.RenderGraph renderGraph, ContextContainer frameData)
             {
-                if (!m_Initialized)
+                using (var builder = renderGraph.AddUnsafePass<PassData>("Native Render Pass", out var passData))
                 {
-                    IntPtr hwnd = IntPtr.Zero;
+                    builder.AllowPassCulling(false);
+
+                    builder.SetRenderFunc((PassData data, UnityEngine.Rendering.RenderGraphModule.UnsafeGraphContext context) =>
+                    {
+                        if (!m_Initialized)
+                        {
+                            IntPtr hwnd = IntPtr.Zero;
 #if UNITY_EDITOR_WIN || UNITY_STANDALONE_WIN
-                    hwnd = Process.GetCurrentProcess().MainWindowHandle;
+                            hwnd = Process.GetCurrentProcess().MainWindowHandle;
 #endif
-                    // 해상도는 임시로 Screen 값을 전달
-                    NativePluginWrapper.InitializeVulkanRenderer(hwnd, (uint)Screen.width, (uint)Screen.height);
-                    m_Initialized = true;
+                            NativePluginWrapper.InitializeVulkanRenderer(hwnd, (uint)Screen.width, (uint)Screen.height);
+
+                            // 에디터에서 익스포트한 씬 바이너리를 네이티브 C++로 즉시 로드
+                            string exportPath = Application.dataPath + "/../NativeCore/ExportedScene.bin";
+                            NativePluginWrapper.LoadNativeScene(exportPath);
+
+                            m_Initialized = true;
+                        }
+
+                        // CameraData에서 View/Proj 매트릭스 획득
+                        UniversalCameraData cameraData = frameData.Get<UniversalCameraData>();
+                        Camera cam = cameraData.camera;
+
+                        Matrix4x4 viewMatrix = cam.worldToCameraMatrix;
+                        Matrix4x4 projMatrix = GL.GetGPUProjectionMatrix(cam.projectionMatrix, false);
+
+                        NativePluginWrapper.UpdateCameraState(ref viewMatrix, ref projMatrix);
+                        NativePluginWrapper.ExecuteNativeRenderLoop();
+                    });
                 }
-
-                // 현재 카메라의 뷰/프로젝션 행렬을 네이티브로 넘김
-                Camera cam = renderingData.cameraData.camera;
-                Matrix4x4 viewMatrix = cam.worldToCameraMatrix;
-                Matrix4x4 projMatrix = GL.GetGPUProjectionMatrix(cam.projectionMatrix, false);
-
-                NativePluginWrapper.UpdateCameraState(ref viewMatrix, ref projMatrix);
-
-                // 유니티의 IssuePluginEvent를 쓰지 않고, 
-                // C++ 네이티브의 독자적인 렌더 루프 함수를 직접 호출하여 유니티 스레드를 블로킹하고 네이티브 렌더링 수행
-                NativePluginWrapper.ExecuteNativeRenderLoop();
             }
 
             public void Cleanup()

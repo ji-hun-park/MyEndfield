@@ -13,8 +13,8 @@ namespace Endfield.Editor
             // 타겟 바이너리 파일 경로
             string exportPath = Path.Combine(Application.dataPath, "../NativeCore/ExportedScene.bin");
 
-            // 씬 내의 모든 MeshRenderer 찾기
-            MeshRenderer[] renderers = Object.FindObjectsOfType<MeshRenderer>();
+            // 씬 내의 모든 MeshRenderer 찾기 (Unity 6 최신 API)
+            MeshRenderer[] renderers = Object.FindObjectsByType<MeshRenderer>(FindObjectsInactive.Exclude);
 
             using (BinaryWriter writer = new BinaryWriter(File.Open(exportPath, FileMode.Create)))
             {
