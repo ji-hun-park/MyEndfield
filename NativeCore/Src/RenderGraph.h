@@ -22,6 +22,8 @@ struct RenderResource {
     std::string name;
     bool isPersistent;
     VkImage image;
+    VkImageView imageView; // 바인딩을 위한 뷰
+    VkSampler sampler;     // 바인딩을 위한 샘플러
     AccessTag currentAccess;
 };
 
@@ -29,6 +31,7 @@ struct RenderResource {
 struct PassAccess {
     std::string resourceName;
     AccessTag accessType;
+    uint32_t bindingIndex; // 쉐이더의 어느 바인딩 슬롯에 꽂을 것인가?
 };
 
 // 하나의 렌더 패스(노드)
@@ -36,6 +39,9 @@ class RenderPassNode {
 public:
     std::string name;
     std::vector<PassAccess> declaredAccesses;
+    
+    // 컴파일 시점에 자동 생성된 디스크립터 셋 (패스 전용 Set 0번 등)
+    VkDescriptorSet boundDescriptorSet = VK_NULL_HANDLE;
 };
 
 // 그래프 선언 시점에 계산된, 특정 패스 진입 직전에 실행할 배리어 묶음
@@ -48,14 +54,17 @@ struct MergedBarrierGroup {
 
 class RenderGraph {
 public:
-    void AddResource(const std::string& name, bool isPersistent, AccessTag initialAccess, VkImage image = VK_NULL_HANDLE);
+    void AddResource(const std::string& name, bool isPersistent, AccessTag initialAccess, VkImage image = VK_NULL_HANDLE, VkImageView imageView = VK_NULL_HANDLE, VkSampler sampler = VK_NULL_HANDLE);
     void AddPass(const std::string& passName);
-    void DeclarePassAccess(const std::string& passName, const std::string& resourceName, AccessTag access);
+    void DeclarePassAccess(const std::string& passName, const std::string& resourceName, AccessTag access, uint32_t bindingIndex = 0);
 
-    // 선언된 자원 접근 정보를 분석하여 런타임 배리어를 미리 계산해 병합(Merge)합니다.
+    // 디스크립터 할당을 위한 풀 및 레이아웃 주입 (간략화)
+    void SetDescriptorAllocator(VkDevice device, VkDescriptorPool pool, VkDescriptorSetLayout setLayout, VkPipelineLayout pipelineLayout);
+
+    // 선언된 자원 접근 정보를 분석하여 런타임 배리어를 미리 계산해 병합(Merge)하고 디스크립터를 바인딩합니다.
     void CompileGraph();
     
-    // 미리 컴파일된 배리어를 실행하고 패스를 순차적으로 구동합니다.
+    // 미리 컴파일된 배리어를 실행하고 디스크립터를 바인딩하며 패스를 구동합니다.
     void Execute(VkCommandBuffer cmdBuffer); 
 
 private:
@@ -67,6 +76,11 @@ private:
 
     // AccessTag를 실제 Vulkan 파라미터로 변환하는 헬퍼
     void GetVulkanAccessParams(AccessTag tag, VkAccessFlags& outAccess, VkImageLayout& outLayout, VkPipelineStageFlags& outStage);
+
+    VkDevice m_Device = VK_NULL_HANDLE;
+    VkDescriptorPool m_DescriptorPool = VK_NULL_HANDLE;
+    VkDescriptorSetLayout m_SetLayout = VK_NULL_HANDLE;
+    VkPipelineLayout m_PipelineLayout = VK_NULL_HANDLE;
 };
 
 } // namespace Endfield

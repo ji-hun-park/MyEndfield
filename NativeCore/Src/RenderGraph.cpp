@@ -3,13 +3,15 @@
 
 namespace Endfield {
 
-void RenderGraph::AddResource(const std::string& name, bool isPersistent, AccessTag initialAccess, VkImage image)
+void RenderGraph::AddResource(const std::string& name, bool isPersistent, AccessTag initialAccess, VkImage image, VkImageView imageView, VkSampler sampler)
 {
     RenderResource res;
     res.name = name;
     res.isPersistent = isPersistent;
     res.currentAccess = initialAccess;
     res.image = image;
+    res.imageView = imageView;
+    res.sampler = sampler;
     m_Resources[name] = res;
 }
 
@@ -20,13 +22,14 @@ void RenderGraph::AddPass(const std::string& passName)
     m_Passes.push_back(node);
 }
 
-void RenderGraph::DeclarePassAccess(const std::string& passName, const std::string& resourceName, AccessTag access)
+void RenderGraph::DeclarePassAccess(const std::string& passName, const std::string& resourceName, AccessTag access, uint32_t bindingIndex)
 {
     for (auto& pass : m_Passes) {
         if (pass.name == passName) {
             PassAccess pa;
             pa.resourceName = resourceName;
             pa.accessType = access;
+            pa.bindingIndex = bindingIndex;
             pass.declaredAccesses.push_back(pa);
             return;
         }
@@ -74,12 +77,20 @@ void RenderGraph::GetVulkanAccessParams(AccessTag tag, VkAccessFlags& outAccess,
     }
 }
 
+void RenderGraph::SetDescriptorAllocator(VkDevice device, VkDescriptorPool pool, VkDescriptorSetLayout setLayout, VkPipelineLayout pipelineLayout)
+{
+    m_Device = device;
+    m_DescriptorPool = pool;
+    m_SetLayout = setLayout;
+    m_PipelineLayout = pipelineLayout;
+}
+
 void RenderGraph::CompileGraph()
 {
     m_PassBarriers.clear();
 
     // 모든 패스를 순회하면서 상태 변화를 추적합니다.
-    for (const auto& pass : m_Passes) {
+    for (auto& pass : m_Passes) {
         MergedBarrierGroup barrierGroup;
         barrierGroup.passName = pass.name;
         barrierGroup.srcStageMask = 0;
@@ -145,6 +156,57 @@ void RenderGraph::CompileGraph()
         if (!barrierGroup.imageBarriers.empty()) {
             m_PassBarriers[pass.name] = barrierGroup;
         }
+
+        // ==========================================
+        // 자동화된 리소스 바인딩 (Descriptor Set 할당)
+        // ==========================================
+        if (m_Device != VK_NULL_HANDLE && m_DescriptorPool != VK_NULL_HANDLE && m_SetLayout != VK_NULL_HANDLE) {
+            std::vector<VkDescriptorImageInfo> imageInfos;
+            std::vector<VkWriteDescriptorSet> descriptorWrites;
+
+            for (const auto& access : pass.declaredAccesses) {
+                if (access.accessType == AccessTag::ShaderRead) {
+                    auto it = m_Resources.find(access.resourceName);
+                    if (it != m_Resources.end() && it->second.imageView != VK_NULL_HANDLE) {
+                        VkDescriptorImageInfo info{};
+                        info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                        info.imageView = it->second.imageView;
+                        info.sampler = it->second.sampler;
+                        imageInfos.push_back(info);
+
+                        VkWriteDescriptorSet write{};
+                        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                        write.dstBinding = access.bindingIndex;
+                        write.dstArrayElement = 0;
+                        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                        write.descriptorCount = 1;
+                        // 나중에 data() 포인터를 연결하기 위해 인덱스를 기록해둡니다. (임시)
+                        // vector가 리사이즈되면 포인터가 깨지므로 아래에서 최종 연결합니다.
+                        descriptorWrites.push_back(write);
+                    }
+                }
+            }
+
+            if (!descriptorWrites.empty()) {
+                VkDescriptorSetAllocateInfo allocInfo{};
+                allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+                allocInfo.descriptorPool = m_DescriptorPool;
+                allocInfo.descriptorSetCount = 1;
+                allocInfo.pSetLayouts = &m_SetLayout;
+
+                // TODO: 렌더 패스가 삭제/재구성될 때의 해제 로직 필요
+                vkAllocateDescriptorSets(m_Device, &allocInfo, &pass.boundDescriptorSet);
+
+                // 안전하게 포인터 매핑
+                for (size_t i = 0; i < descriptorWrites.size(); ++i) {
+                    descriptorWrites[i].dstSet = pass.boundDescriptorSet;
+                    descriptorWrites[i].pImageInfo = &imageInfos[i];
+                }
+
+                vkUpdateDescriptorSets(m_Device, static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
+                std::cout << "[RenderGraph] Automatically bound " << descriptorWrites.size() << " resources for Pass: " << pass.name << "\n";
+            }
+        }
     }
 }
 
@@ -168,7 +230,20 @@ void RenderGraph::Execute(VkCommandBuffer cmdBuffer)
             );
         }
 
-        // 2. 패스의 실제 렌더링 호출
+        // 2. 패스의 실제 렌더링 호출을 준비하며 자동 할당된 디스크립터 셋이 있다면 바인딩합니다.
+        if (pass.boundDescriptorSet != VK_NULL_HANDLE && m_PipelineLayout != VK_NULL_HANDLE) {
+            vkCmdBindDescriptorSets(
+                cmdBuffer,
+                VK_PIPELINE_BIND_POINT_GRAPHICS, // 차후 Compute Pass 지원 시 분기 필요
+                m_PipelineLayout,
+                0, // 예시로 Set 0번에 패스 글로벌 리소스를 바인딩
+                1,
+                &pass.boundDescriptorSet,
+                0,
+                nullptr
+            );
+        }
+
         // vkCmdBeginRenderPass( ... )
         // ... 패스 내 커스텀 커맨드 (드로우 콜 등) ...
         // vkCmdEndRenderPass(cmdBuffer);
