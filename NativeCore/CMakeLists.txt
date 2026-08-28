@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.10)
 project(NativeCore)
 
 set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Add source files
 set(SOURCES
@@ -23,6 +24,14 @@ if (WIN32)
     target_compile_definitions(NativeCore PRIVATE UNITY_WIN=1)
 endif()
 
-# We need Vulkan SDK headers and Unity Native Plugin headers (Assuming they exist or will be added)
-# target_include_directories(NativeCore PRIVATE ${CMAKE_SOURCE_DIR}/Src)
+# Find Vulkan
+find_package(Vulkan REQUIRED)
 
+# We need Vulkan SDK headers and Source headers
+target_include_directories(NativeCore PRIVATE 
+    ${CMAKE_SOURCE_DIR}/Src
+    ${Vulkan_INCLUDE_DIRS}
+)
+
+# Link Vulkan
+target_link_libraries(NativeCore PRIVATE Vulkan::Vulkan)

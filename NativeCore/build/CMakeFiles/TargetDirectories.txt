@@ -1,0 +1,3 @@
+D:/ArrFolder/WorkSpaces/UnityWorkSpace/MyEndfield/NativeCore/build/CMakeFiles/NativeCore.dir
+D:/ArrFolder/WorkSpaces/UnityWorkSpace/MyEndfield/NativeCore/build/CMakeFiles/ALL_BUILD.dir
+D:/ArrFolder/WorkSpaces/UnityWorkSpace/MyEndfield/NativeCore/build/CMakeFiles/ZERO_CHECK.dir
