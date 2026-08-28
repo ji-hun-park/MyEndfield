@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <vector>
 #include <memory>
+#include <unordered_map>
 
 namespace Endfield {
 
@@ -65,6 +66,11 @@ struct Archetype {
     std::vector<std::unique_ptr<Chunk>> chunks;
 };
 
+struct EntityRecord {
+    Chunk* chunk;
+    uint32_t index;
+};
+
 // Custom ECS Manager to bypass Unity DOTS
 class ECSManager {
 public:
@@ -72,7 +78,7 @@ public:
     ~ECSManager();
 
     Entity CreateEntity(const ComponentMask& mask);
-    void DestroyEntity(Entity entity); // 실제 게임에선 free list 등 관리 필요
+    void DestroyEntity(Entity entity); // Swap-and-pop implementation
 
     // Rule 2: 마스크를 통한 빠른 청크 필터링
     std::vector<Chunk*> QueryChunks(const ComponentMask& queryMask);
@@ -90,6 +96,7 @@ public:
 
 private:
     std::vector<std::unique_ptr<Archetype>> m_Archetypes;
+    std::unordered_map<uint32_t, EntityRecord> m_EntityMap;
     uint32_t m_NextEntityId = 1;
 
     Archetype* GetOrCreateArchetype(const ComponentMask& mask);

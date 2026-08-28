@@ -112,7 +112,6 @@ Entity ECSManager::CreateEntity(const ComponentMask& mask) {
     Entity ent = { m_NextEntityId++, 1 };
     Archetype* arch = GetOrCreateArchetype(mask);
 
-    // 해당 아키타입 내에 자리가 남은 청크 찾기
     Chunk* targetChunk = nullptr;
     for (auto& chunk : arch->chunks) {
         if (chunk->entityCount < CHUNK_CAPACITY) {
@@ -121,20 +120,53 @@ Entity ECSManager::CreateEntity(const ComponentMask& mask) {
         }
     }
 
-    // 남은 청크가 없으면 새로 청크 메모리 할당
     if (!targetChunk) {
         arch->chunks.push_back(std::make_unique<Chunk>(mask));
         targetChunk = arch->chunks.back().get();
         std::cout << "[ECS] Allocated new Chunk for Archetype.\n";
     }
 
-    targetChunk->AddEntity(ent);
+    uint32_t index = targetChunk->AddEntity(ent);
+    m_EntityMap[ent.id] = { targetChunk, index };
+
     return ent;
 }
 
 void ECSManager::DestroyEntity(Entity entity) {
-    // 단순화된 Destroy: 실제 구현에선 Chunk를 순회하거나 HashMap 인덱스로 엔티티 위치를 찾아야 함
-    // 삭제 시 Chunk의 마지막 엔티티를 삭제 대상 인덱스로 옮기고 entityCount-- 처리 (Swap-and-pop)
+    auto it = m_EntityMap.find(entity.id);
+    if (it == m_EntityMap.end()) return;
+
+    EntityRecord record = it->second;
+    Chunk* chunk = record.chunk;
+    uint32_t deleteIndex = record.index;
+    uint32_t lastIndex = chunk->entityCount - 1;
+
+    // 만약 삭제하려는 엔티티가 청크의 마지막 엔티티가 아니라면, 마지막 엔티티를 삭제 위치로 복사 (Swap and pop)
+    if (deleteIndex != lastIndex) {
+        // 1. 마지막 엔티티의 ID를 삭제 위치로 이동
+        Entity lastEntity = chunk->entityArray[lastIndex];
+        chunk->entityArray[deleteIndex] = lastEntity;
+
+        // 2. 각 컴포넌트(SoA Column)의 데이터를 복사 (메모리 덮어쓰기)
+        for (size_t i = 0; i < chunk->columns.size(); ++i) {
+            size_t compSize = ComponentRegistry::GetComponentSize(chunk->componentIndices[i]);
+            if (compSize > 0 && chunk->columns[i] != nullptr) {
+                uint8_t* compArray = static_cast<uint8_t*>(chunk->columns[i]);
+                std::memcpy(
+                    compArray + (deleteIndex * compSize),
+                    compArray + (lastIndex * compSize),
+                    compSize
+                );
+            }
+        }
+
+        // 3. 이동된 마지막 엔티티의 매핑 정보 갱신
+        m_EntityMap[lastEntity.id].index = deleteIndex;
+    }
+
+    // 엔티티 개수를 줄이고(pop), 삭제된 엔티티 맵에서 제거
+    chunk->entityCount--;
+    m_EntityMap.erase(entity.id);
 }
 
 std::vector<Chunk*> ECSManager::QueryChunks(const ComponentMask& queryMask) {
