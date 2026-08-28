@@ -909,8 +909,7 @@ void VulkanBackend::SubmitBatch(const void* batchData, int instanceCount)
         const InstanceData& data = instances[i];
         
         // Decode the 64-bit sort key to get material ID
-        // Format [63:48 Pass] [47:32 Pipeline] [31:16 Material] [15:0 Depth]
-        uint32_t materialID = (data.sortKey >> 16) & 0xFFFF;
+        uint32_t materialID = data.sortKey.materialID;
         
         // Redundant binding optimization (Placeholder value 0x7F7F7F7F logic)
         // If the parallel worker encountered this same material earlier, we don't bind again.

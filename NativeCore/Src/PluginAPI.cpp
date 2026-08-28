@@ -1,11 +1,13 @@
 #include "PluginAPI.h"
 #include "VulkanBackend.h"
 #include "ECS.h"
+#include "Culling.h"
 #include <memory>
 #include <iostream>
 
 static std::unique_ptr<VulkanBackend> g_Backend = nullptr;
 static std::unique_ptr<Endfield::ECSManager> g_ECS = nullptr;
+static std::unique_ptr<Endfield::CullingSystem> g_Culling = nullptr;
 
 extern "C" {
 
@@ -22,10 +24,20 @@ ENDFIELD_API void InitializeVulkanRenderer(void* windowHandle, uint32_t width, u
         // 더미 컴포넌트 레지스트리 세팅: 0번 비트를 Transform(64바이트 Matrix)으로 지정
         Endfield::ComponentRegistry::RegisterComponent(0, sizeof(float) * 16);
     }
+    
+    if (!g_Culling) {
+        g_Culling = std::make_unique<Endfield::CullingSystem>();
+        // 하드웨어 동시성(코어 수) 기반으로 멀티스레딩 워커 갯수 자동 초기화
+        g_Culling->Initialize(0); 
+    }
 }
 
 ENDFIELD_API void ShutdownVulkanRenderer()
 {
+    if (g_Culling) {
+        g_Culling->Shutdown();
+        g_Culling.reset();
+    }
     if (g_ECS) {
         g_ECS.reset();
     }
@@ -40,13 +52,22 @@ ENDFIELD_API void ExecuteNativeRenderLoop()
     if (g_Backend) {
         g_Backend->BeginFrame();
         
-        if (g_ECS) {
+        if (g_ECS && g_Culling) {
             // ECS 쿼리를 통해 컴포넌트를 가져와 Batch Data로 만들어 렌더링에 사용할 수 있습니다.
             Endfield::ComponentMask transformMask;
             transformMask.low = 1; // 0번 비트(Transform)만 가진 엔티티 쿼리
             
             auto chunks = g_ECS->QueryChunks(transformMask);
-            // 실제 구현에서는 chunk를 병렬 워커(Parallel Worker)에 분배하고 Culling을 수행합니다.
+            
+            // 더미 뷰 프로젝션 행렬로 프러스텀 추출
+            float dummyVP[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
+            Endfield::Frustum frustum;
+            frustum.ExtractFromMatrix(dummyVP);
+
+            // ECS의 Transform(AABB) 데이터를 바탕으로 멀티스레드 Frustum Culling 수행 (Task Graph)
+            std::vector<Endfield::AABB> dummyAABBs; // 실제로는 Chunk를 순회하며 모아야 함
+            std::vector<bool> visibilityResults;
+            g_Culling->PerformFrustumCullingParallel(frustum, dummyAABBs, visibilityResults);
         }
 
         g_Backend->EndFrame();

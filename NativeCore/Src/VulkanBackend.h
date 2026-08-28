@@ -8,6 +8,7 @@
 #endif
 #include <vulkan/vulkan.h>
 #include "RenderGraph.h"
+#include "SortKey.h"
 
 using namespace Endfield;
 
@@ -101,7 +102,7 @@ private:
 
     struct InstanceData {
         float mvpMatrix[16];
-        uint64_t sortKey;
+        SortKey sortKey;
     };
 
     RenderGraph m_RenderGraph;
