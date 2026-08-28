@@ -9,6 +9,7 @@ set(SOURCES
     Src/PluginAPI.h
     Src/PluginAPI.cpp
     Src/ECS.h
+    Src/ECS.cpp
     Src/Culling.h
     Src/SortKey.h
     Src/RenderGraph.h
