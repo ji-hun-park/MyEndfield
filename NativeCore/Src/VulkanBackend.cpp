@@ -987,7 +987,47 @@ void VulkanBackend::SetupRenderGraph()
     m_RenderGraph.AddPass("ShadowPass");
     m_RenderGraph.DeclarePassAccess("ShadowPass", "ShadowMap", AccessTag::DepthStencilWrite);
 
-    m_RenderGraph.AddPass("OpaquePass");
+    m_RenderGraph.AddPass("OpaquePass", [this](VkCommandBuffer cmd) {
+        // OpaquePass 진입 시 실제 렌더 패스 실행 (배리어는 이미 적용됨)
+        VkRenderPassBeginInfo renderPassInfo{};
+        renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        renderPassInfo.renderPass = m_RenderPass;
+        renderPassInfo.framebuffer = m_SwapchainFramebuffers[m_CurrentImageIndex];
+        renderPassInfo.renderArea.offset = {0, 0};
+        renderPassInfo.renderArea.extent = m_SwapchainExtent;
+
+        VkClearValue clearValues[2]{};
+        clearValues[0].color = {{0.1f, 0.1f, 0.15f, 1.0f}};
+        clearValues[1].depthStencil = {1.0f, 0};
+
+        renderPassInfo.clearValueCount = 2;
+        renderPassInfo.pClearValues = clearValues;
+
+        vkCmdBeginRenderPass(cmd, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+        if (m_GraphicsPipeline != VK_NULL_HANDLE) {
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_GraphicsPipeline);
+        }
+
+        VkViewport viewport{};
+        viewport.x = 0.0f;
+        viewport.y = 0.0f;
+        viewport.width = (float) m_SwapchainExtent.width;
+        viewport.height = (float) m_SwapchainExtent.height;
+        viewport.minDepth = 0.0f;
+        viewport.maxDepth = 1.0f;
+        vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+        VkRect2D scissor{};
+        scissor.offset = {0, 0};
+        scissor.extent = m_SwapchainExtent;
+        vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+        // 이전 SubmitBatch에서 넘겨받았던 드로우콜 리스트 실행
+        ExecuteOpaqueDraws(cmd);
+
+        vkCmdEndRenderPass(cmd);
+    });
     m_RenderGraph.DeclarePassAccess("OpaquePass", "GBufferColor", AccessTag::ColorAttachmentWrite);
     m_RenderGraph.DeclarePassAccess("OpaquePass", "GBufferDepth", AccessTag::DepthStencilWrite);
     m_RenderGraph.DeclarePassAccess("OpaquePass", "ShadowMap", AccessTag::ShaderRead); // Needs transition!
@@ -1070,47 +1110,8 @@ bool VulkanBackend::BeginFrame()
         return false;
     }
     
-    // Begin Render Pass
-    VkRenderPassBeginInfo renderPassInfo{};
-    renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    renderPassInfo.renderPass = m_RenderPass;
-    renderPassInfo.framebuffer = m_SwapchainFramebuffers[m_CurrentImageIndex];
-    renderPassInfo.renderArea.offset = {0, 0};
-    renderPassInfo.renderArea.extent = m_SwapchainExtent;
-
-    VkClearValue clearValues[2]{};
-    clearValues[0].color = {{0.1f, 0.1f, 0.15f, 1.0f}};
-    clearValues[1].depthStencil = {1.0f, 0};
-
-    renderPassInfo.clearValueCount = 2;
-    renderPassInfo.pClearValues = clearValues;
-
-    vkCmdBeginRenderPass(m_CommandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
-
-    // Bind Graphics Pipeline
-    if (m_GraphicsPipeline != VK_NULL_HANDLE) {
-        vkCmdBindPipeline(m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_GraphicsPipeline);
-        if (m_DescriptorSet0_Pass != VK_NULL_HANDLE && m_PipelineLayout != VK_NULL_HANDLE) {
-            vkCmdBindDescriptorSets(m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_PipelineLayout, 0, 1, &m_DescriptorSet0_Pass, 0, nullptr);
-        }
-    }
-
-    // Set Dynamic States (Viewport & Scissor)
-    VkViewport viewport{};
-    viewport.x = 0.0f;
-    viewport.y = 0.0f;
-    viewport.width = (float) m_SwapchainExtent.width;
-    viewport.height = (float) m_SwapchainExtent.height;
-    viewport.minDepth = 0.0f;
-    viewport.maxDepth = 1.0f;
-    vkCmdSetViewport(m_CommandBuffer, 0, 1, &viewport);
-
-    VkRect2D scissor{};
-    scissor.offset = {0, 0};
-    scissor.extent = m_SwapchainExtent;
-    vkCmdSetScissor(m_CommandBuffer, 0, 1, &scissor);
-
-        // Test Draw is removed. Actual drawing will happen in SubmitBatch.
+    // 렌더 패스 시작 및 렌더링 명령어는 이제 RenderGraph가 EndFrame 시점에 일괄 처리합니다.
+    // 여기서는 커맨드 버퍼 기록 준비(Begin)만 수행합니다.
 
     // Reset our redundant binding tracker for the new frame (for SubmitBatch)
     m_LastBoundMaterialSet = 0xFFFFFFFF;
@@ -1119,12 +1120,21 @@ bool VulkanBackend::BeginFrame()
 
 void VulkanBackend::SubmitBatch(const void* batchData, int instanceCount)
 {
-    // ... (Keep existing implementation or we can just leave it as is. 
-    // The instructions say "BeginFrame() 직후... vkCmdDraw를 호출" so I added it to BeginFrame. 
-    // SubmitBatch can stay for when we use actual mesh instances later).
-    if (instanceCount == 0 || !batchData || m_CommandBuffer == VK_NULL_HANDLE) return;
+    // The instructions say "BeginFrame() -> SubmitBatch() -> EndFrame()".
+    // Since the actual draw logic is now managed by the Render Graph which runs in EndFrame(),
+    // we simply queue the batch data here.
+    if (instanceCount == 0 || !batchData) return;
 
     const InstanceData* instances = static_cast<const InstanceData*>(batchData);
+    m_PendingBatchData.assign(instances, instances + instanceCount);
+}
+
+void VulkanBackend::ExecuteOpaqueDraws(VkCommandBuffer cmdBuffer)
+{
+    if (m_PendingBatchData.empty() || cmdBuffer == VK_NULL_HANDLE) return;
+
+    int instanceCount = static_cast<int>(m_PendingBatchData.size());
+    const InstanceData* instances = m_PendingBatchData.data();
 
     // --- [-1] 소프트웨어 오클루전 컬링 (Software Occlusion Culling) ---
     // 컬링을 가장 먼저 수행하여 화면에 보이지 않는 오브젝트를 제거합니다.
@@ -1166,7 +1176,7 @@ void VulkanBackend::SubmitBatch(const void* batchData, int instanceCount)
 
     // E.g., Bind Set 0 (Per Pass) once per batch/pass
     if (m_PipelineLayout != VK_NULL_HANDLE && m_DescriptorSet0_Pass != VK_NULL_HANDLE) {
-        vkCmdBindDescriptorSets(m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, 
+        vkCmdBindDescriptorSets(cmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, 
                                 m_PipelineLayout, 0, 1, &m_DescriptorSet0_Pass, 0, nullptr);
     }
 
@@ -1227,37 +1237,38 @@ void VulkanBackend::SubmitBatch(const void* batchData, int instanceCount)
     // 정렬(Sort)이 완료된 상태에서 순차적으로 커맨드를 순회하며 중복 바인딩을 제거(Skip)합니다.
 
     int instanceIndex = 0;
-    for (const auto& cmd : intermediateCmds)
-    {
-        // 플레이스홀더 확인 및 지연 평가(Lazy Evaluation)
-        if (cmd.descriptorSetPlaceholder == PLACEHOLDER_BINDING)
-        {
-            if (cmd.materialID != m_LastBoundMaterialSet) {
-                // 이전 드로우 콜과 머티리얼이 다름 -> 중복 아님. 실제 바인딩 수행!
-                
-                m_LastBoundMaterialSet = cmd.materialID;
-                
-                // 실제 Set 1(머티리얼) 바인딩 수행 (m_MaterialSets가 세팅되어 있다고 가정)
-                if (cmd.materialID < m_MaterialSets.size() && m_MaterialSets[cmd.materialID] != VK_NULL_HANDLE) {
-                    vkCmdBindDescriptorSets(m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, 
-                                            m_PipelineLayout, 1, 1, &m_MaterialSets[cmd.materialID], 0, nullptr);
-                }
-            } else {
-                // 이전 드로우 콜과 머티리얼이 같음 -> 중복(Redundant) 바인딩!
-                // 플레이스홀더 상태 그대로 스킵(Skip)하여 렌더링 스레드 및 GPU 리소스를 절약합니다.
+    for (int i = 0; i < instanceCount; ++i) {
+        IntermediateDrawCmd& cmd = intermediateCmds[i];
+
+        // 상태 캐싱: 이전 인스턴스와 같은 머티리얼(파이프라인 상태)이라면 바인딩 생략
+        if (cmd.materialID != m_LastBoundMaterialSet) {
+            cmd.descriptorSetPlaceholder = cmd.materialID; // 실제 바인딩 ID로 리졸브(Resolve)
+            m_LastBoundMaterialSet = cmd.materialID;
+            
+            // 실제 디스크립터 바인딩 기록
+            // 유니티 플러그인 특성상 미리 바인딩된 Set 1(텍스처/머티리얼 정보)을 사용합니다.
+            // 여기서는 시뮬레이션을 위해 m_MaterialSets 배열을 사용한다고 가정합니다.
+            // 실제 환경에서는 materialID를 인덱스로 삼아 미리 할당된 디스크립터 셋을 바인딩합니다.
+            
+            // 임시로 Set 1(머티리얼) 바인딩 코드 (m_MaterialSets가 세팅되어 있다고 가정)
+            if (cmd.materialID < m_MaterialSets.size() && m_MaterialSets[cmd.materialID] != VK_NULL_HANDLE) {
+                vkCmdBindDescriptorSets(cmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, 
+                                        m_PipelineLayout, 1, 1, &m_MaterialSets[cmd.materialID], 0, nullptr);
             }
+        } else {
+            // 이미 바인딩되어 있으므로 패스 (커맨드 생성 생략)
         }
-        
-        // Set 2: 드로우마다 바뀌는 오브젝트 데이터 (Dynamic Offset 적용)
-        // Endfield 문서: "오브젝트별로 별도 셋을 만들지 않고, 전체를 위한 큰 버퍼 하나를 
-        // 하나의 셋으로 만들어두고, 각 드로우는 그 버퍼 안에서 자신의 슬라이스로 향하는 다이나믹 오프셋만 이동시킵니다."
+
+        // --- [3] 실제 Draw Call 기록 ---
+        // Endfield 문서: "Dynamic Offset을 사용하여 버퍼 바인딩 오버헤드 제거"
+        // 유니폼 버퍼(UBO)나 SSBO 배열의 오프셋을 조절해 모델 매트릭스에 접근
         if (m_PipelineLayout != VK_NULL_HANDLE && m_DescriptorSet2_Object != VK_NULL_HANDLE) {
             // 참고: 실제 Vulkan 구현에서는 디바이스의 minUniformBufferOffsetAlignment 값에 맞춰 
             // 오프셋 보정(Alignment)이 필요하지만, 여기서는 구조적 이해를 위해 기본 크기 단위 오프셋을 보여줍니다.
             uint32_t dynamicOffset = static_cast<uint32_t>(instanceIndex * sizeof(InstanceData));
             
             vkCmdBindDescriptorSets(
-                m_CommandBuffer, 
+                cmdBuffer, 
                 VK_PIPELINE_BIND_POINT_GRAPHICS, 
                 m_PipelineLayout, 
                 2, // Set 2: Object Data
@@ -1273,11 +1284,11 @@ void VulkanBackend::SubmitBatch(const void* batchData, int instanceCount)
             if (mesh.vertexBuffer && mesh.indexBuffer && cmd.subMeshIdx < mesh.subMeshes.size()) {
                 VkBuffer vertexBuffers[] = {mesh.vertexBuffer};
                 VkDeviceSize offsets[] = {0};
-                vkCmdBindVertexBuffers(m_CommandBuffer, 0, 1, vertexBuffers, offsets);
-                vkCmdBindIndexBuffer(m_CommandBuffer, mesh.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+                vkCmdBindVertexBuffers(cmdBuffer, 0, 1, vertexBuffers, offsets);
+                vkCmdBindIndexBuffer(cmdBuffer, mesh.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
 
                 const SubMeshBuffer& subMesh = mesh.subMeshes[cmd.subMeshIdx];
-                vkCmdDrawIndexed(m_CommandBuffer, subMesh.indexCount, 1, subMesh.firstIndex, 0, 0);
+                vkCmdDrawIndexed(cmdBuffer, subMesh.indexCount, 1, subMesh.firstIndex, 0, 0);
             }
         }
         
@@ -1289,8 +1300,8 @@ void VulkanBackend::EndFrame()
 {
     if (m_CommandBuffer == VK_NULL_HANDLE || m_Device == VK_NULL_HANDLE) return;
 
-    // End Render Pass
-    vkCmdEndRenderPass(m_CommandBuffer);
+    // 그래프 배리어 병합 및 패스 실행을 여기서 일괄 수행합니다!
+    m_RenderGraph.Execute(m_CommandBuffer);
 
     if (vkEndCommandBuffer(m_CommandBuffer) != VK_SUCCESS) {
         LogToUnity("[VulkanBackend ERROR] Failed to record command buffer!");

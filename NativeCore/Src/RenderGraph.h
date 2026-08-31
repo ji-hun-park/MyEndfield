@@ -3,6 +3,7 @@
 #include <string>
 #include <unordered_map>
 #include <vulkan/vulkan.h>
+#include <functional>
 
 namespace Endfield {
 
@@ -42,6 +43,9 @@ public:
     
     // 컴파일 시점에 자동 생성된 디스크립터 셋 (패스 전용 Set 0번 등)
     VkDescriptorSet boundDescriptorSet = VK_NULL_HANDLE;
+
+    // 런타임에 실행할 패스 실제 로직
+    std::function<void(VkCommandBuffer)> executeCallback = nullptr;
 };
 
 // 그래프 선언 시점에 계산된, 특정 패스 진입 직전에 실행할 배리어 묶음
@@ -55,7 +59,7 @@ struct MergedBarrierGroup {
 class RenderGraph {
 public:
     void AddResource(const std::string& name, bool isPersistent, AccessTag initialAccess, VkImage image = VK_NULL_HANDLE, VkImageView imageView = VK_NULL_HANDLE, VkSampler sampler = VK_NULL_HANDLE);
-    void AddPass(const std::string& passName);
+    void AddPass(const std::string& passName, std::function<void(VkCommandBuffer)> callback = nullptr);
     void DeclarePassAccess(const std::string& passName, const std::string& resourceName, AccessTag access, uint32_t bindingIndex = 0);
 
     // 디스크립터 할당을 위한 풀 및 레이아웃 주입 (간략화)

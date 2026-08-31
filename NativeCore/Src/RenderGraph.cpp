@@ -15,10 +15,11 @@ void RenderGraph::AddResource(const std::string& name, bool isPersistent, Access
     m_Resources[name] = res;
 }
 
-void RenderGraph::AddPass(const std::string& passName)
+void RenderGraph::AddPass(const std::string& passName, std::function<void(VkCommandBuffer)> callback)
 {
     RenderPassNode node;
     node.name = passName;
+    node.executeCallback = callback;
     m_Passes.push_back(node);
 }
 
@@ -244,11 +245,10 @@ void RenderGraph::Execute(VkCommandBuffer cmdBuffer)
             );
         }
 
-        // vkCmdBeginRenderPass( ... )
-        // ... 패스 내 커스텀 커맨드 (드로우 콜 등) ...
-        // vkCmdEndRenderPass(cmdBuffer);
-        
-        // (실제 프로젝트에서는 여기에 각 패스별 람다(Lambda)나 가상 함수 콜을 연결합니다.)
+        // 3. 실제 패스 실행 콜백 (vkCmdBeginRenderPass ~ vkCmdEndRenderPass 및 드로우콜 포함)
+        if (pass.executeCallback) {
+            pass.executeCallback(cmdBuffer);
+        }
     }
 }
 

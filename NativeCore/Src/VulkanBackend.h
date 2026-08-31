@@ -57,6 +57,8 @@ public:
     void SubmitBatch(const void* batchData, int instanceCount);
     void EndFrame();
 
+    void ExecuteOpaqueDraws(VkCommandBuffer cmdBuffer);
+
     void SetupRenderGraph();
     void RecreateSwapchain();
     void CleanupSwapchain();
@@ -143,6 +145,7 @@ private:
     VkDescriptorSet m_DescriptorSet2_Object = VK_NULL_HANDLE;
     std::vector<VkDescriptorSet> m_MaterialSets;
     uint32_t m_LastBoundMaterialSet = 0xFFFFFFFF;
+    std::vector<InstanceData> m_PendingBatchData;
     std::vector<InstanceData> m_SortedInstances;
 
     CullingSystem m_CullingSystem;
