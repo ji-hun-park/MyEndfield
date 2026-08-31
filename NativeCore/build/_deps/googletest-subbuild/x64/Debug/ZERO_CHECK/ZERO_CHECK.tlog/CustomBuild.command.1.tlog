@@ -1,0 +1,10 @@
+^D:\ARRFOLDER\WORKSPACES\UNITYWORKSPACE\MYENDFIELD\NATIVECORE\BUILD\_DEPS\GOOGLETEST-SUBBUILD\CMAKEFILES\BDC7E67B1A341C9EB6793BB59A15B8C1\GENERATE.STAMP.RULE
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SD:/ArrFolder/WorkSpaces/UnityWorkSpace/MyEndfield/NativeCore/build/_deps/googletest-subbuild -BD:/ArrFolder/WorkSpaces/UnityWorkSpace/MyEndfield/NativeCore/build/_deps/googletest-subbuild --check-stamp-list CMakeFiles/generate.stamp.list --vs-solution-file D:/ArrFolder/WorkSpaces/UnityWorkSpace/MyEndfield/NativeCore/build/_deps/googletest-subbuild/googletest-populate.slnx
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

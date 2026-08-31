@@ -41,3 +41,47 @@ target_include_directories(NativeCore PRIVATE
 
 # Link Vulkan
 target_link_libraries(NativeCore PRIVATE Vulkan::Vulkan)
+
+# ==============================================================================
+# Unit Tests (Google Test)
+# ==============================================================================
+include(FetchContent)
+FetchContent_Declare(
+  googletest
+  GIT_REPOSITORY https://github.com/google/googletest.git
+  GIT_TAG        release-1.12.1
+)
+# For Windows: Prevent overriding the parent project's compiler/linker settings
+set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(googletest)
+
+enable_testing()
+
+add_executable(NativeCoreTests
+    Tests/ECSTests.cpp
+    Tests/CullingTests.cpp
+    Src/ECS.cpp
+    Src/Culling.cpp
+    Src/VulkanBackend.cpp
+    Src/SceneLoader.cpp
+    Src/RenderGraph.cpp
+    Src/PluginAPI.cpp
+)
+
+target_include_directories(NativeCoreTests PRIVATE 
+    ${CMAKE_SOURCE_DIR}/Src
+)
+
+if (WIN32)
+    target_compile_definitions(NativeCoreTests PRIVATE UNITY_WIN=1)
+    target_compile_options(NativeCoreTests PRIVATE "/utf-8")
+endif()
+
+# We link the test executable against Vulkan and gtest
+target_link_libraries(NativeCoreTests
+    PRIVATE
+    Vulkan::Vulkan
+    gtest_main
+)
+
+add_test(NAME NativeCoreTests COMMAND NativeCoreTests)

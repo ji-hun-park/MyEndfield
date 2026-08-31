@@ -12,6 +12,10 @@ C:/Program Files/CMake/share/cmake-4.4/Modules/Compiler/CMakeCommonCompilerMacro
 C:/Program Files/CMake/share/cmake-4.4/Modules/Compiler/MSVC-C.cmake
 C:/Program Files/CMake/share/cmake-4.4/Modules/Compiler/MSVC-CXX.cmake
 C:/Program Files/CMake/share/cmake-4.4/Modules/Compiler/MSVC.cmake
+C:/Program Files/CMake/share/cmake-4.4/Modules/ExternalProject/shared_internal_commands.cmake
+C:/Program Files/CMake/share/cmake-4.4/Modules/FetchContent.cmake
+C:/Program Files/CMake/share/cmake-4.4/Modules/FetchContent/CMakeLists.cmake.in
+C:/Program Files/CMake/share/cmake-4.4/Modules/FindGit.cmake
 C:/Program Files/CMake/share/cmake-4.4/Modules/FindPackageHandleStandardArgs.cmake
 C:/Program Files/CMake/share/cmake-4.4/Modules/FindPackageMessage.cmake
 C:/Program Files/CMake/share/cmake-4.4/Modules/FindVulkan.cmake

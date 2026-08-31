@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "D:/ArrFolder/WorkSpaces/UnityWorkSpace/MyEndfield/NativeCore/build/_deps/googletest-subbuild/CMakeFiles/googletest-populate"
+		},
+		{
+			"file" : "D:/ArrFolder/WorkSpaces/UnityWorkSpace/MyEndfield/NativeCore/build/_deps/googletest-subbuild/CMakeFiles/bdc7e67b1a341c9eb6793bb59a15b8c1/googletest-populate.rule"
+		},
+		{
+			"file" : "D:/ArrFolder/WorkSpaces/UnityWorkSpace/MyEndfield/NativeCore/build/_deps/googletest-subbuild/CMakeFiles/96d1083f6041fff526aac2f639ee013b/googletest-populate-complete.rule"
+		},
+		{
+			"file" : "D:/ArrFolder/WorkSpaces/UnityWorkSpace/MyEndfield/NativeCore/build/_deps/googletest-subbuild/CMakeFiles/58569215f2d449ac22571c16a3d7d457/googletest-populate-build.rule"
+		},
+		{
+			"file" : "D:/ArrFolder/WorkSpaces/UnityWorkSpace/MyEndfield/NativeCore/build/_deps/googletest-subbuild/CMakeFiles/58569215f2d449ac22571c16a3d7d457/googletest-populate-configure.rule"
+		},
+		{
+			"file" : "D:/ArrFolder/WorkSpaces/UnityWorkSpace/MyEndfield/NativeCore/build/_deps/googletest-subbuild/CMakeFiles/58569215f2d449ac22571c16a3d7d457/googletest-populate-download.rule"
+		},
+		{
+			"file" : "D:/ArrFolder/WorkSpaces/UnityWorkSpace/MyEndfield/NativeCore/build/_deps/googletest-subbuild/CMakeFiles/58569215f2d449ac22571c16a3d7d457/googletest-populate-install.rule"
+		},
+		{
+			"file" : "D:/ArrFolder/WorkSpaces/UnityWorkSpace/MyEndfield/NativeCore/build/_deps/googletest-subbuild/CMakeFiles/58569215f2d449ac22571c16a3d7d457/googletest-populate-mkdir.rule"
+		},
+		{
+			"file" : "D:/ArrFolder/WorkSpaces/UnityWorkSpace/MyEndfield/NativeCore/build/_deps/googletest-subbuild/CMakeFiles/58569215f2d449ac22571c16a3d7d457/googletest-populate-patch.rule"
+		},
+		{
+			"file" : "D:/ArrFolder/WorkSpaces/UnityWorkSpace/MyEndfield/NativeCore/build/_deps/googletest-subbuild/CMakeFiles/58569215f2d449ac22571c16a3d7d457/googletest-populate-test.rule"
+		},
+		{
+			"file" : "D:/ArrFolder/WorkSpaces/UnityWorkSpace/MyEndfield/NativeCore/build/_deps/googletest-subbuild/CMakeFiles/58569215f2d449ac22571c16a3d7d457/googletest-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"googletest-populate"
+		],
+		"name" : "googletest-populate"
+	}
+}

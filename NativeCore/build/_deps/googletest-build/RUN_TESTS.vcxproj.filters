@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="18.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\build\CMakeFiles\bb880a8c16027f98e3bfddca6495fc99\RUN_TESTS_force.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{FEA7C07A-C813-3104-B0D8-A0D90014227C}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

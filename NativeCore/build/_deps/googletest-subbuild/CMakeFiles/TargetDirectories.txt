@@ -1,0 +1,3 @@
+D:/ArrFolder/WorkSpaces/UnityWorkSpace/MyEndfield/NativeCore/build/_deps/googletest-subbuild/CMakeFiles/googletest-populate.dir
+D:/ArrFolder/WorkSpaces/UnityWorkSpace/MyEndfield/NativeCore/build/_deps/googletest-subbuild/CMakeFiles/ALL_BUILD.dir
+D:/ArrFolder/WorkSpaces/UnityWorkSpace/MyEndfield/NativeCore/build/_deps/googletest-subbuild/CMakeFiles/ZERO_CHECK.dir

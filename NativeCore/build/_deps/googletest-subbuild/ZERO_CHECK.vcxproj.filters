@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="18.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\build\_deps\googletest-subbuild\CMakeFiles\bdc7e67b1a341c9eb6793bb59a15b8c1\generate.stamp.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{AD992742-8F88-343D-AABF-311346F8CB83}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>
