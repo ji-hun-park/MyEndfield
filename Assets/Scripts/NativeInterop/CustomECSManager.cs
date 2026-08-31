@@ -22,21 +22,28 @@ namespace Endfield.NativeInterop
 
         private void Start()
         {
-            // 예시로 현재 씬에 있는 모든 렌더러를 찾아 네이티브에 등록합니다. (Unity 6 호환 최신 API)
-            var renderers = FindObjectsByType<MeshRenderer>(FindObjectsInactive.Exclude);
-            m_TransformDataArray = new NativeTransformData[renderers.Length];
-
-            // Pinned GCHandle을 사용하여 C# 배열의 포인터를 C++로 안전하게 넘깁니다.
-            m_TransformDataHandle = GCHandle.Alloc(m_TransformDataArray, GCHandleType.Pinned);
-
-            for (int i = 0; i < renderers.Length; i++)
+            try
             {
-                m_TrackedTransforms.Add(renderers[i].transform);
-                m_TransformDataArray[i].localToWorld = renderers[i].transform.localToWorldMatrix;
+                // 예시로 현재 씬에 있는 모든 렌더러를 찾아 네이티브에 등록합니다. (Unity 6 호환 최신 API)
+                var renderers = FindObjectsByType<MeshRenderer>(FindObjectsInactive.Exclude);
+                m_TransformDataArray = new NativeTransformData[renderers.Length];
 
-                // 엔티티 ID(인덱스)와 함께 C++ 네이티브 ECS에 등록
-                IntPtr ptr = m_TransformDataHandle.AddrOfPinnedObject() + (i * Marshal.SizeOf<NativeTransformData>());
-                NativePluginWrapper.RegisterEntity((uint)i, ptr);
+                // Pinned GCHandle을 사용하여 C# 배열의 포인터를 C++로 안전하게 넘깁니다.
+                m_TransformDataHandle = GCHandle.Alloc(m_TransformDataArray, GCHandleType.Pinned);
+
+                for (int i = 0; i < renderers.Length; i++)
+                {
+                    m_TrackedTransforms.Add(renderers[i].transform);
+                    m_TransformDataArray[i].localToWorld = renderers[i].transform.localToWorldMatrix;
+
+                    // 엔티티 ID(인덱스)와 함께 C++ 네이티브 ECS에 등록
+                    IntPtr ptr = m_TransformDataHandle.AddrOfPinnedObject() + (i * Marshal.SizeOf<NativeTransformData>());
+                    NativePluginWrapper.RegisterEntity((uint)i, ptr);
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"[CustomECSManager] Failed to initialize or register entities to native ECS: {e.Message}\n{e.StackTrace}");
             }
         }
 

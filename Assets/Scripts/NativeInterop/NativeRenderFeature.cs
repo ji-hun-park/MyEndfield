@@ -25,15 +25,29 @@ namespace Endfield.NativeInterop
                     {
                         if (!m_Initialized)
                         {
-                            IntPtr hwnd = IntPtr.Zero;
+                            try
+                            {
+                                IntPtr hwnd = IntPtr.Zero;
 #if UNITY_EDITOR_WIN || UNITY_STANDALONE_WIN
-                            hwnd = Process.GetCurrentProcess().MainWindowHandle;
+                                hwnd = Process.GetCurrentProcess().MainWindowHandle;
 #endif
-                            NativePluginWrapper.InitializeVulkanRenderer(hwnd, (uint)Screen.width, (uint)Screen.height);
+                                NativePluginWrapper.InitializeVulkanRenderer(hwnd, (uint)Screen.width, (uint)Screen.height);
 
-                            // 에디터에서 익스포트한 씬 바이너리를 네이티브 C++로 즉시 로드
-                            string exportPath = Application.dataPath + "/../NativeCore/ExportedScene.bin";
-                            NativePluginWrapper.LoadNativeScene(exportPath);
+                                // 에디터에서 익스포트한 씬 바이너리를 네이티브 C++로 즉시 로드
+                                string exportPath = Application.dataPath + "/../NativeCore/ExportedScene.bin";
+                                if (!System.IO.File.Exists(exportPath))
+                                {
+                                    Debug.LogError($"[NativeRenderFeature] Exported scene file not found at: {exportPath}. Please export the scene first.");
+                                }
+                                else
+                                {
+                                    NativePluginWrapper.LoadNativeScene(exportPath);
+                                }
+                            }
+                            catch (Exception e)
+                            {
+                                Debug.LogError($"[NativeRenderFeature] Failed to initialize native renderer: {e.Message}\n{e.StackTrace}");
+                            }
 
                             m_Initialized = true;
                         }
@@ -45,8 +59,15 @@ namespace Endfield.NativeInterop
                         Matrix4x4 viewMatrix = cam.worldToCameraMatrix;
                         Matrix4x4 projMatrix = GL.GetGPUProjectionMatrix(cam.projectionMatrix, false);
 
-                        NativePluginWrapper.UpdateCameraState(ref viewMatrix, ref projMatrix);
-                        NativePluginWrapper.ExecuteNativeRenderLoop();
+                        try
+                        {
+                            NativePluginWrapper.UpdateCameraState(ref viewMatrix, ref projMatrix);
+                            NativePluginWrapper.ExecuteNativeRenderLoop();
+                        }
+                        catch (Exception e)
+                        {
+                            Debug.LogError($"[NativeRenderFeature] Exception during native render loop: {e.Message}\n{e.StackTrace}");
+                        }
                     });
                 }
             }
@@ -55,7 +76,14 @@ namespace Endfield.NativeInterop
             {
                 if (m_Initialized)
                 {
-                    NativePluginWrapper.ShutdownVulkanRenderer();
+                    try
+                    {
+                        NativePluginWrapper.ShutdownVulkanRenderer();
+                    }
+                    catch (Exception e)
+                    {
+                        Debug.LogError($"[NativeRenderFeature] Failed to shutdown native renderer: {e.Message}\n{e.StackTrace}");
+                    }
                     m_Initialized = false;
                 }
             }
