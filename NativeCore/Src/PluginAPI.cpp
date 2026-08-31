@@ -10,8 +10,9 @@ static std::unique_ptr<Endfield::VulkanBackend> g_Backend = nullptr;
 static std::unique_ptr<Endfield::ECSManager> g_ECS = nullptr;
 static std::unique_ptr<Endfield::CullingSystem> g_Culling = nullptr;
 
-// 글로벌 씬 AABB 보관 (임시)
+// 글로벌 씬 AABB 및 인스턴스 데이터 보관 (임시)
 static std::vector<Endfield::AABB> g_SceneAABBs;
+static std::vector<Endfield::VulkanBackend::InstanceData> g_SceneInstances;
 
 extern "C" {
 
@@ -42,9 +43,7 @@ ENDFIELD_API void ShutdownVulkanRenderer()
         g_Culling->Shutdown();
         g_Culling.reset();
     }
-    if (g_ECS) {
-        g_ECS.reset();
-    }
+    g_ECS.reset();
     if (g_Backend) {
         g_Backend->Shutdown();
         g_Backend.reset();
@@ -83,6 +82,31 @@ ENDFIELD_API void ExecuteNativeRenderLoop()
             // ECS의 Transform(AABB) 데이터를 바탕으로 멀티스레드 Frustum Culling 수행 (Task Graph)
             std::vector<bool> visibilityResults;
             g_Culling->PerformFrustumCullingParallel(frustum, g_SceneAABBs, visibilityResults);
+
+            // Culling 결과를 바탕으로 가시성 있는 인스턴스만 추려냄
+            std::vector<Endfield::VulkanBackend::InstanceData> visibleInstances;
+            visibleInstances.reserve(g_SceneInstances.size());
+            for (size_t i = 0; i < g_SceneInstances.size(); ++i) {
+                if (i < visibilityResults.size() && visibilityResults[i]) {
+                    // MVP 매트릭스 계산 (LocalToWorld * ViewProj)
+                    Endfield::VulkanBackend::InstanceData inst = g_SceneInstances[i];
+                    float localToWorld[16];
+                    for (int k=0; k<16; ++k) localToWorld[k] = inst.mvpMatrix[k];
+                    
+                    for (int r = 0; r < 4; ++r) {
+                        for (int c = 0; c < 4; ++c) {
+                            inst.mvpMatrix[r * 4 + c] = 0;
+                            for (int k = 0; k < 4; ++k) {
+                                inst.mvpMatrix[r * 4 + c] += vp[r * 4 + k] * localToWorld[k * 4 + c];
+                            }
+                        }
+                    }
+                    visibleInstances.push_back(inst);
+                }
+            }
+
+            // 그래픽스 커맨드 버퍼에 Draw Call 제출
+            g_Backend->SubmitBatch(visibleInstances.data(), static_cast<int>(visibleInstances.size()));
         }
 
         g_Backend->EndFrame();
@@ -122,7 +146,7 @@ ENDFIELD_API void LoadNativeScene(const char* path)
 {
     if (g_ECS && path != nullptr) {
         std::string filePath(path);
-        Endfield::SceneLoader::LoadScene(filePath, *g_ECS, g_SceneAABBs);
+        Endfield::SceneLoader::LoadScene(filePath, *g_ECS, g_SceneAABBs, g_SceneInstances);
     }
 }
 

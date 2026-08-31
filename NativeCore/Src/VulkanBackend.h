@@ -18,6 +18,11 @@ public:
     VulkanBackend();
     ~VulkanBackend();
 
+    struct InstanceData {
+        float mvpMatrix[16];
+        SortKey sortKey;
+    };
+
     typedef void(*DebugLogFunc)(const char*);
     static void SetDebugCallback(DebugLogFunc callback);
 
@@ -100,12 +105,20 @@ private:
     std::vector<VkDescriptorSet> m_MaterialSets;
     uint32_t m_LastBoundMaterialSet = 0xFFFFFFFF;
 
-    struct InstanceData {
-        float mvpMatrix[16];
-        SortKey sortKey;
-    };
 
     RenderGraph m_RenderGraph;
+
+    // Depth buffer resources
+    VkImage m_DepthImage = VK_NULL_HANDLE;
+    VkDeviceMemory m_DepthImageMemory = VK_NULL_HANDLE;
+    VkImageView m_DepthImageView = VK_NULL_HANDLE;
+    VkFormat m_DepthFormat;
+
+    // Depth buffer helper methods
+    VkFormat FindSupportedFormat(const std::vector<VkFormat>& candidates, VkImageTiling tiling, VkFormatFeatureFlags features);
+    VkFormat FindDepthFormat();
+    void CreateDepthResources();
+    uint32_t FindMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
 };
 
 } // namespace Endfield

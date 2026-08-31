@@ -4,7 +4,7 @@
 
 namespace Endfield {
 
-bool SceneLoader::LoadScene(const std::string& filePath, ECSManager& ecsManager, std::vector<AABB>& outAABBs) {
+bool SceneLoader::LoadScene(const std::string& filePath, ECSManager& ecsManager, std::vector<AABB>& outAABBs, std::vector<VulkanBackend::InstanceData>& outInstances) {
     std::ifstream file(filePath, std::ios::binary);
     if (!file.is_open()) {
         std::cerr << "[SceneLoader] Failed to open scene file: " << filePath << "\n";
@@ -25,6 +25,7 @@ bool SceneLoader::LoadScene(const std::string& filePath, ECSManager& ecsManager,
     std::cout << "[SceneLoader] Loading " << objectCount << " objects from scene...\n";
 
     outAABBs.reserve(objectCount);
+    outInstances.reserve(objectCount);
 
     // 컴포넌트 마스크 준비 (0번 비트 = Transform(64바이트), 1번 비트 = SortKey(8바이트), 2번 비트 = AABB(24바이트))
     // 이 예시를 위해 ECS.cpp 혹은 PluginAPI.cpp 등에서 이 컴포넌트들을 RegisterComponent 했다고 가정합니다.
@@ -47,6 +48,13 @@ bool SceneLoader::LoadScene(const std::string& filePath, ECSManager& ecsManager,
         file.read(reinterpret_cast<char*>(&matId), sizeof(int32_t));
 
         outAABBs.push_back(bounds);
+
+        VulkanBackend::InstanceData inst;
+        for (int k = 0; k < 16; ++k) inst.mvpMatrix[k] = matrix[k];
+        inst.sortKey.materialID = static_cast<uint16_t>(matId);
+        inst.sortKey.pipelineID = static_cast<uint16_t>(meshId); // meshId를 임시로 pipelineID에 저장
+        inst.sortKey.depth = 0;
+        outInstances.push_back(inst);
 
         // 실제 ECS에 생성
         Entity ent = ecsManager.CreateEntity(mask);
