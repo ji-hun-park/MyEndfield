@@ -30,6 +30,7 @@ static LRESULT CALLBACK StandaloneWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam
 }
 
 static HWND CreateStandaloneWindow(uint32_t width, uint32_t height) {
+    std::cout << "[PluginAPI] Attempting to create standalone window with size: " << width << "x" << height << std::endl;
     const char CLASS_NAME[] = "EndfieldNativeRendererClass";
     
     WNDCLASSA wc = { };
@@ -37,7 +38,11 @@ static HWND CreateStandaloneWindow(uint32_t width, uint32_t height) {
     wc.hInstance = GetModuleHandleA(NULL);
     wc.lpszClassName = CLASS_NAME;
     
-    RegisterClassA(&wc);
+    ATOM atom = RegisterClassA(&wc);
+    if (!atom && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
+        // Registration failed
+        return NULL;
+    }
     
     HWND hwnd = CreateWindowExA(
         0,
@@ -51,6 +56,11 @@ static HWND CreateStandaloneWindow(uint32_t width, uint32_t height) {
     if (hwnd) {
         ShowWindow(hwnd, SW_SHOW);
         UpdateWindow(hwnd);
+        SetForegroundWindow(hwnd);
+        BringWindowToTop(hwnd);
+        std::cout << "[PluginAPI] Standalone window created successfully. HWND: " << hwnd << std::endl;
+    } else {
+        std::cout << "[PluginAPI ERROR] Failed to create standalone window! Error: " << GetLastError() << std::endl;
     }
     return hwnd;
 }
