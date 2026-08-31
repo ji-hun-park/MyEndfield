@@ -8,6 +8,7 @@
 #include <set>
 #include <string>
 #include <vector>
+#include <thread>
 
 namespace Endfield {
 
@@ -1101,11 +1102,84 @@ void VulkanBackend::SubmitBatch(const void* batchData, int instanceCount)
                                 m_PipelineLayout, 0, 1, &m_DescriptorSet0_Pass, 0, nullptr);
     }
 
-    for (int i = 0; i < instanceCount; ++i)
+    // --- [1] 워커 스레드의 병렬 커맨드 빌드 단계 (Simulated) ---
+    // 워커는 다른 워커가 어떤 머티리얼을 바인딩했는지 알 수 없으므로,
+    // 일단 0x7F7F7F7F라는 플레이스홀더를 사용하여 디스크립터 바인딩 예약을 생성합니다.
+    
+    struct IntermediateDrawCmd {
+        uint32_t descriptorSetPlaceholder; // 0x7F7F7F7F (더미 마커)
+        uint32_t materialID;
+        uint32_t meshId;
+        uint32_t subMeshIdx;
+        InstanceData data;
+    };
+
+    std::vector<IntermediateDrawCmd> intermediateCmds(instanceCount); // reserve 대신 미리 할당
+    const uint32_t PLACEHOLDER_BINDING = 0x7F7F7F7F;
+
+    unsigned int numThreads = std::thread::hardware_concurrency();
+    if (numThreads == 0) numThreads = 4;
+    if (numThreads > static_cast<unsigned int>(instanceCount)) {
+        numThreads = static_cast<unsigned int>(instanceCount);
+    }
+
+    std::vector<std::thread> workers;
+    int chunkSize = instanceCount / numThreads;
+
+    for (unsigned int t = 0; t < numThreads; ++t) {
+        int startIdx = t * chunkSize;
+        int endIdx = (t == numThreads - 1) ? instanceCount : startIdx + chunkSize;
+
+        workers.emplace_back([startIdx, endIdx, instances, &intermediateCmds, PLACEHOLDER_BINDING]() {
+            for (int i = startIdx; i < endIdx; ++i) {
+                const InstanceData& data = instances[i];
+                IntermediateDrawCmd cmd;
+                
+                // 앞뒤 문맥(Context)을 모르는 워커 스레드의 행동: 무조건 플레이스홀더 기록
+                cmd.descriptorSetPlaceholder = PLACEHOLDER_BINDING;
+                cmd.materialID = data.sortKey.materialID;
+                cmd.meshId = data.sortKey.pipelineID;
+                cmd.subMeshIdx = data.subMeshIndex;
+                cmd.data = data;
+                
+                // 락(Lock) 없이 각자 독립된 인덱스 공간에 기록
+                intermediateCmds[i] = cmd;
+            }
+        });
+    }
+
+    // 워커 스레드가 커맨드 빌드를 모두 마칠 때까지 대기 (조인)
+    for (auto& worker : workers) {
+        if (worker.joinable()) {
+            worker.join();
+        }
+    }
+
+    // --- [2] 최종 정리(Finalize) 단계 ---
+    // 정렬(Sort)이 완료된 상태에서 순차적으로 커맨드를 순회하며 중복 바인딩을 제거(Skip)합니다.
+
+    for (const auto& cmd : intermediateCmds)
     {
-        const InstanceData& data = instances[i];
+        // 플레이스홀더 확인 및 지연 평가(Lazy Evaluation)
+        if (cmd.descriptorSetPlaceholder == PLACEHOLDER_BINDING)
+        {
+            if (cmd.materialID != m_LastBoundMaterialSet) {
+                // 이전 드로우 콜과 머티리얼이 다름 -> 중복 아님. 실제 바인딩 수행!
+                
+                m_LastBoundMaterialSet = cmd.materialID;
+                
+                // 실제 Set 1(머티리얼) 바인딩 수행 (m_MaterialSets가 세팅되어 있다고 가정)
+                if (cmd.materialID < m_MaterialSets.size() && m_MaterialSets[cmd.materialID] != VK_NULL_HANDLE) {
+                    vkCmdBindDescriptorSets(m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, 
+                                            m_PipelineLayout, 1, 1, &m_MaterialSets[cmd.materialID], 0, nullptr);
+                }
+            } else {
+                // 이전 드로우 콜과 머티리얼이 같음 -> 중복(Redundant) 바인딩!
+                // 플레이스홀더 상태 그대로 스킵(Skip)하여 렌더링 스레드 및 GPU 리소스를 절약합니다.
+            }
+        }
         
-        // Push Constants 업데이트 (MVP Matrix)
+        // Push Constants 업데이트 (Set 2 Dynamic Offset을 대신하여 현재는 Push Constant 사용 중)
         if (m_PipelineLayout != VK_NULL_HANDLE) {
             vkCmdPushConstants(
                 m_CommandBuffer, 
@@ -1113,21 +1187,18 @@ void VulkanBackend::SubmitBatch(const void* batchData, int instanceCount)
                 VK_SHADER_STAGE_VERTEX_BIT, 
                 0, 
                 sizeof(InstanceData), 
-                &data);
+                &cmd.data);
         }
 
-        uint32_t meshId = data.sortKey.pipelineID;
-        uint32_t subMeshIdx = data.subMeshIndex;
-
-        if (meshId < m_Meshes.size()) {
-            MeshBuffer& mesh = m_Meshes[meshId];
-            if (mesh.vertexBuffer && mesh.indexBuffer && subMeshIdx < mesh.subMeshes.size()) {
+        if (cmd.meshId < m_Meshes.size()) {
+            MeshBuffer& mesh = m_Meshes[cmd.meshId];
+            if (mesh.vertexBuffer && mesh.indexBuffer && cmd.subMeshIdx < mesh.subMeshes.size()) {
                 VkBuffer vertexBuffers[] = {mesh.vertexBuffer};
                 VkDeviceSize offsets[] = {0};
                 vkCmdBindVertexBuffers(m_CommandBuffer, 0, 1, vertexBuffers, offsets);
                 vkCmdBindIndexBuffer(m_CommandBuffer, mesh.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
 
-                const SubMeshBuffer& subMesh = mesh.subMeshes[subMeshIdx];
+                const SubMeshBuffer& subMesh = mesh.subMeshes[cmd.subMeshIdx];
                 vkCmdDrawIndexed(m_CommandBuffer, subMesh.indexCount, 1, subMesh.firstIndex, 0, 0);
             }
         }
