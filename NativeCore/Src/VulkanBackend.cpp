@@ -1130,10 +1130,16 @@ void VulkanBackend::SubmitBatch(const void* batchData, int instanceCount)
     // 컬링을 가장 먼저 수행하여 화면에 보이지 않는 오브젝트를 제거합니다.
     
     // 임시로 오클루더 메쉬와 뷰프로젝션 행렬을 넘겨주는 형태 (실제 데이터는 외부에서 주입 필요)
-    // std::vector<OccluderMesh> dummyOccluders;
-    // m_CullingSystem.BatchOccluders(dummyOccluders, instances[0].mvpMatrix, m_SwapchainExtent.width, m_SwapchainExtent.height);
-    // m_CullingSystem.RasterizeTilesParallel();
-    // m_CullingSystem.PerformOcclusionTestParallel();
+    std::vector<OccluderMesh> dummyOccluders;
+    m_CullingSystem.BatchOccluders(dummyOccluders, instances[0].mvpMatrix, m_SwapchainExtent.width, m_SwapchainExtent.height);
+    m_CullingSystem.RasterizeTilesParallel(m_SwapchainExtent.width, m_SwapchainExtent.height);
+     
+    std::vector<bool> visibilityResults;
+    AABB defaultLocalBounds = { {-1, -1, -1}, {1, 1, 1} };
+    m_CullingSystem.PerformOcclusionTestParallel(
+        instances[0].mvpMatrix, instanceCount, sizeof(InstanceData), 
+        defaultLocalBounds, m_SwapchainExtent.width, m_SwapchainExtent.height, visibilityResults
+    );
 
     // --- [0] 64비트 정렬 키 기반의 오브젝트 정렬 (Sorting) ---
     // Endfield 문서: "정렬 비교는 16바이트짜리 값에 대한 분기 비교이며, 표준 정렬(std::sort)을 그대로 사용합니다."

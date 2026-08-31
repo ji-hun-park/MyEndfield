@@ -8,6 +8,7 @@ struct AABB {
     float maxBounds[3];
 };
 
+struct Vector2 { float x, y; };
 struct Vector3 { float x, y, z; };
 
 struct ScreenTriangle {
@@ -46,10 +47,13 @@ public:
     void BatchOccluders(const std::vector<OccluderMesh>& occluders, const float* vpMatrix, float screenWidth, float screenHeight);
     
     // 3. Tile screen into 8 tiles and rasterize in parallel (lock-free)
-    void RasterizeTilesParallel();
+    void RasterizeTilesParallel(float screenWidth, float screenHeight);
     
     // 4. View integration: Culling for multiple views (Main, Shadow, etc.) at once
-    void PerformOcclusionTestParallel();
+    void PerformOcclusionTestParallel(const float* mvpMatrices, int instanceCount, size_t stride, const AABB& localBounds, float screenWidth, float screenHeight, std::vector<bool>& outVisibility);
+
+    static const int DEPTH_RES_X = 256;
+    static const int DEPTH_RES_Y = 128;
 
 private:
     uint32_t m_NumWorkers;
