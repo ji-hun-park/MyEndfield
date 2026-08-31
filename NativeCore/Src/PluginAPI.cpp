@@ -10,6 +10,9 @@ static std::unique_ptr<Endfield::VulkanBackend> g_Backend = nullptr;
 static std::unique_ptr<Endfield::ECSManager> g_ECS = nullptr;
 static std::unique_ptr<Endfield::CullingSystem> g_Culling = nullptr;
 
+// 글로벌 씬 AABB 보관 (임시)
+static std::vector<Endfield::AABB> g_SceneAABBs;
+
 extern "C" {
 
 ENDFIELD_API void InitializeVulkanRenderer(void* windowHandle, uint32_t width, uint32_t height)
@@ -48,6 +51,9 @@ ENDFIELD_API void ShutdownVulkanRenderer()
     }
 }
 
+static float g_ViewMatrix[16];
+static float g_ProjMatrix[16];
+
 ENDFIELD_API void ExecuteNativeRenderLoop()
 {
     if (g_Backend) {
@@ -60,10 +66,19 @@ ENDFIELD_API void ExecuteNativeRenderLoop()
             
             auto chunks = g_ECS->QueryChunks(transformMask);
             
-            // 더미 뷰 프로젝션 행렬로 프러스텀 추출
-            float dummyVP[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
+            // 캐싱된 View, Proj 매트릭스로 프러스텀 추출 (단순 행렬곱 예시)
+            float vp[16];
+            for (int i = 0; i < 4; ++i) {
+                for (int j = 0; j < 4; ++j) {
+                    vp[i * 4 + j] = 0;
+                    for (int k = 0; k < 4; ++k) {
+                        vp[i * 4 + j] += g_ProjMatrix[i * 4 + k] * g_ViewMatrix[k * 4 + j];
+                    }
+                }
+            }
+            
             Endfield::Frustum frustum;
-            frustum.ExtractFromMatrix(dummyVP);
+            frustum.ExtractFromMatrix(vp);
 
             // ECS의 Transform(AABB) 데이터를 바탕으로 멀티스레드 Frustum Culling 수행 (Task Graph)
             std::vector<bool> visibilityResults;
@@ -92,13 +107,16 @@ ENDFIELD_API void RegisterEntity(uint32_t id, float* transformData)
 
 ENDFIELD_API void UpdateCameraState(float* viewMatrix, float* projMatrix)
 {
+    for (int i = 0; i < 16; ++i) {
+        g_ViewMatrix[i] = viewMatrix[i];
+        g_ProjMatrix[i] = projMatrix[i];
+    }
+
     if (g_Backend) {
         g_Backend->UpdateCamera(viewMatrix, projMatrix);
     }
 }
 
-// 글로벌 씬 AABB 보관 (임시)
-static std::vector<Endfield::AABB> g_SceneAABBs;
 
 ENDFIELD_API void LoadNativeScene(const char* path)
 {

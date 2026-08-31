@@ -88,7 +88,7 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
       <AdditionalIncludeDirectories>D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\Src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <AdditionalOptions>%(AdditionalOptions) /external:I "C:/VulkanSDK/1.4.357.0/include"</AdditionalOptions>
+      <AdditionalOptions>%(AdditionalOptions) /external:I "C:/VulkanSDK/1.4.357.0/include" /utf-8</AdditionalOptions>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
       <BufferSecurityCheck></BufferSecurityCheck>
@@ -147,7 +147,7 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
       <AdditionalIncludeDirectories>D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\Src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <AdditionalOptions>%(AdditionalOptions) /external:I "C:/VulkanSDK/1.4.357.0/include"</AdditionalOptions>
+      <AdditionalOptions>%(AdditionalOptions) /external:I "C:/VulkanSDK/1.4.357.0/include" /utf-8</AdditionalOptions>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <BasicRuntimeChecks>Default</BasicRuntimeChecks>
       <BufferSecurityCheck></BufferSecurityCheck>
@@ -207,7 +207,7 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">
     <ClCompile>
       <AdditionalIncludeDirectories>D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\Src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <AdditionalOptions>%(AdditionalOptions) /external:I "C:/VulkanSDK/1.4.357.0/include"</AdditionalOptions>
+      <AdditionalOptions>%(AdditionalOptions) /external:I "C:/VulkanSDK/1.4.357.0/include" /utf-8</AdditionalOptions>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <BasicRuntimeChecks>Default</BasicRuntimeChecks>
       <BufferSecurityCheck></BufferSecurityCheck>
@@ -267,7 +267,7 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">
     <ClCompile>
       <AdditionalIncludeDirectories>D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\Src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <AdditionalOptions>%(AdditionalOptions) /external:I "C:/VulkanSDK/1.4.357.0/include"</AdditionalOptions>
+      <AdditionalOptions>%(AdditionalOptions) /external:I "C:/VulkanSDK/1.4.357.0/include" /utf-8</AdditionalOptions>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <BasicRuntimeChecks>Default</BasicRuntimeChecks>
       <BufferSecurityCheck></BufferSecurityCheck>
@@ -382,8 +382,13 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\Src\PluginAPI.h" />
+    <ClCompile Include="D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\Src\PluginAPI.cpp" />
     <ClInclude Include="D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\Src\ECS.h" />
+    <ClCompile Include="D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\Src\ECS.cpp" />
     <ClInclude Include="D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\Src\Culling.h" />
+    <ClCompile Include="D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\Src\Culling.cpp" />
+    <ClInclude Include="D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\Src\SceneLoader.h" />
+    <ClCompile Include="D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\Src\SceneLoader.cpp" />
     <ClInclude Include="D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\Src\SortKey.h" />
     <ClInclude Include="D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\Src\RenderGraph.h" />
     <ClCompile Include="D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\Src\RenderGraph.cpp" />

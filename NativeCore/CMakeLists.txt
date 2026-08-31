@@ -27,6 +27,7 @@ add_library(NativeCore SHARED ${SOURCES})
 # Target OS defines
 if (WIN32)
     target_compile_definitions(NativeCore PRIVATE UNITY_WIN=1)
+    target_compile_options(NativeCore PRIVATE "/utf-8")
 endif()
 
 # Find Vulkan
