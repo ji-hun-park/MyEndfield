@@ -505,10 +505,6 @@ void VulkanBackend::CreateRenderPass()
     VkSubpassDependency dependency{};
     dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
     dependency.dstSubpass = 0;
-    dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    dependency.srcAccessMask = 0;
-    dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
     dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
     dependency.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
     dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
@@ -519,8 +515,6 @@ void VulkanBackend::CreateRenderPass()
     // 4. Create Render Pass
     VkRenderPassCreateInfo renderPassInfo{};
     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-    renderPassInfo.attachmentCount = 1;
-    renderPassInfo.pAttachments = &colorAttachment;
     renderPassInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
     renderPassInfo.pAttachments = attachments.data();
     renderPassInfo.subpassCount = 1;
@@ -542,8 +536,6 @@ void VulkanBackend::CreateFramebuffers()
     m_SwapchainFramebuffers.resize(m_SwapchainImageViews.size());
 
     for (size_t i = 0; i < m_SwapchainImageViews.size(); i++) {
-        VkImageView attachments[] = {
-            m_SwapchainImageViews[i] // Connect Swapchain image view to the color attachment
         std::vector<VkImageView> attachments = {
             m_SwapchainImageViews[i],
             m_DepthImageView // Connect Depth image view
@@ -552,8 +544,6 @@ void VulkanBackend::CreateFramebuffers()
         VkFramebufferCreateInfo framebufferInfo{};
         framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
         framebufferInfo.renderPass = m_RenderPass;
-        framebufferInfo.attachmentCount = 1;
-        framebufferInfo.pAttachments = attachments;
         framebufferInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
         framebufferInfo.pAttachments = attachments.data();
         framebufferInfo.width = m_SwapchainExtent.width;
@@ -912,9 +902,6 @@ void VulkanBackend::BeginFrame()
     renderPassInfo.renderArea.offset = {0, 0};
     renderPassInfo.renderArea.extent = m_SwapchainExtent;
 
-    VkClearValue clearColor = {{{0.1f, 0.1f, 0.15f, 1.0f}}}; // Dark blue-ish gray
-    renderPassInfo.clearValueCount = 1;
-    renderPassInfo.pClearValues = &clearColor;
     VkClearValue clearValues[2]{};
     clearValues[0].color = {{0.1f, 0.1f, 0.15f, 1.0f}};
     clearValues[1].depthStencil = {1.0f, 0};
