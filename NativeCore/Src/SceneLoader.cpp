@@ -4,7 +4,7 @@
 
 namespace Endfield {
 
-bool SceneLoader::LoadScene(const std::string& filePath, ECSManager& ecsManager, std::vector<AABB>& outAABBs, std::vector<VulkanBackend::InstanceData>& outInstances, std::vector<MeshData>& outMeshes) {
+bool SceneLoader::LoadScene(const std::string& filePath, ECSManager& ecsManager, std::vector<MeshData>& outMeshes) {
     std::ifstream file(filePath, std::ios::binary);
     if (!file.is_open()) {
         VulkanBackend::LogToUnity("[SceneLoader ERROR] Failed to open scene file: " + filePath);
@@ -59,16 +59,13 @@ bool SceneLoader::LoadScene(const std::string& filePath, ECSManager& ecsManager,
     file.read(reinterpret_cast<char*>(&objectCount), sizeof(uint32_t));
     VulkanBackend::LogToUnity("[SceneLoader] Loading " + std::to_string(objectCount) + " objects from scene...");
 
-    outAABBs.reserve(objectCount);
-    outInstances.reserve(objectCount);
-
     ComponentMask mask;
-    mask.low = 0b111; // 0, 1, 2 비트
+    mask.low = 0b1110; // Bit 1(Transform), 2(Bounds), 3(Mesh)
     for (uint32_t i = 0; i < objectCount; i++) {
-        float matrix[16];
-        file.read(reinterpret_cast<char*>(matrix), sizeof(float) * 16);
+        TransformComponent transform;
+        file.read(reinterpret_cast<char*>(transform.localToWorld), sizeof(float) * 16);
 
-        AABB bounds;
+        BoundsComponent bounds;
         file.read(reinterpret_cast<char*>(&bounds.minBounds), sizeof(float) * 3);
         file.read(reinterpret_cast<char*>(&bounds.maxBounds), sizeof(float) * 3);
         
@@ -79,20 +76,18 @@ bool SceneLoader::LoadScene(const std::string& filePath, ECSManager& ecsManager,
 
         if (meshId < 0) continue; // Dummy data (renderer without mesh)
 
-        outAABBs.push_back(bounds);
-
-        VulkanBackend::InstanceData inst;
-        for (int k = 0; k < 16; ++k) inst.mvpMatrix[k] = matrix[k];
-        inst.sortKey.materialID = static_cast<uint16_t>(matId);
-        inst.sortKey.pipelineID = static_cast<uint16_t>(meshId); // meshId를 pipelineID로 씀 (임시)
-        inst.sortKey.depth = 0;
-        inst.subMeshIndex = static_cast<uint32_t>(subMeshIndex);
-        outInstances.push_back(inst);
+        MeshComponent meshComp;
+        meshComp.meshId = meshId;
+        meshComp.subMeshIndex = subMeshIndex;
+        meshComp.materialId = matId;
 
         Entity ent = ecsManager.CreateEntity(mask);
+        ecsManager.SetComponentData(ent, 1, transform);
+        ecsManager.SetComponentData(ent, 2, bounds);
+        ecsManager.SetComponentData(ent, 3, meshComp);
     }
 
-    VulkanBackend::LogToUnity("[SceneLoader] Scene loaded successfully.");
+    VulkanBackend::LogToUnity("[SceneLoader] Scene loaded into ECS successfully.");
     return true;
 }
 

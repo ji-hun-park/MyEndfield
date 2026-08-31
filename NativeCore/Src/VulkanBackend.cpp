@@ -1143,8 +1143,14 @@ void VulkanBackend::SubmitBatch(const void* batchData, int instanceCount)
 
     // --- [0] 64비트 정렬 키 기반의 오브젝트 정렬 (Sorting) ---
     // Endfield 문서: "정렬 비교는 16바이트짜리 값에 대한 분기 비교이며, 표준 정렬(std::sort)을 그대로 사용합니다."
-    // 렌더 루프 도중 메모리 재할당 오버헤드를 막기 위해, 멤버 변수(m_SortedInstances)를 재사용합니다.
-    m_SortedInstances.assign(instances, instances + instanceCount);
+    m_SortedInstances.clear();
+    m_SortedInstances.reserve(instanceCount);
+    for (int i = 0; i < instanceCount; ++i) {
+        // Occlusion Culling을 통과한(보이는) 인스턴스만 렌더 리스트에 등록
+        if (i < visibilityResults.size() && visibilityResults[i]) {
+            m_SortedInstances.push_back(instances[i]);
+        }
+    }
     
     std::sort(m_SortedInstances.begin(), m_SortedInstances.end(), [](const InstanceData& a, const InstanceData& b) {
         return a.sortKey < b.sortKey; // SortKey.h에 정의된 64비트 uint64_t(value) 기반 operator< 비교

@@ -24,6 +24,23 @@ struct ComponentMask {
     }
 };
 
+// 렌더링에 사용되는 핵심 데이터 컴포넌트 구조체 (SoA 메모리 매핑용)
+struct TransformComponent {
+    float localToWorld[16];
+};
+
+struct BoundsComponent {
+    float minBounds[3];
+    float maxBounds[3];
+};
+
+struct MeshComponent {
+    int32_t meshId;
+    int32_t subMeshIndex;
+    int32_t materialId;
+};
+
+
 // 8-byte Entity Handle
 struct Entity {
     uint32_t id;
