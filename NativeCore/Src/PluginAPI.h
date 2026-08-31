@@ -26,4 +26,7 @@ extern "C" {
 
     // 유니티 에디터 스크립트에서 익스포트한 씬 바이너리를 C++ 네이티브로 로드
     ENDFIELD_API void LoadNativeScene(const char* path);
+
+    // 런타임에 FBX 인스턴스를 무작위 위치로 대량 복제 (성능 테스트용 스포너)
+    ENDFIELD_API void SpawnNativeInstances(int count, float spread);
 }

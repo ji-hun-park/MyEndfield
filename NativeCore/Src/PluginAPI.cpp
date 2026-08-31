@@ -5,6 +5,7 @@
 #include "SceneLoader.h"
 #include <memory>
 #include <iostream>
+#include <cstdlib>
 
 static std::unique_ptr<Endfield::VulkanBackend> g_Backend = nullptr;
 static std::unique_ptr<Endfield::ECSManager> g_ECS = nullptr;
@@ -163,6 +164,45 @@ ENDFIELD_API void LoadNativeScene(const char* path)
                 }
                 g_Backend->UploadMesh(vkVertices, subMeshIndices, static_cast<uint32_t>(i));
             }
+        }
+    }
+}
+
+ENDFIELD_API void SpawnNativeInstances(int count, float spread)
+{
+    if (!g_ECS || g_SceneInstances.empty()) return;
+
+    size_t baseCount = g_SceneInstances.size();
+    g_SceneInstances.reserve(baseCount + count * baseCount);
+    g_SceneAABBs.reserve(baseCount + count * baseCount);
+
+    Endfield::ComponentMask mask;
+    mask.low = 0b111;
+
+    for (int i = 0; i < count; ++i) {
+        float offsetX = ((float)rand() / RAND_MAX) * spread - (spread * 0.5f);
+        float offsetZ = ((float)rand() / RAND_MAX) * spread - (spread * 0.5f);
+
+        for (size_t j = 0; j < baseCount; ++j) {
+            Endfield::VulkanBackend::InstanceData newInst = g_SceneInstances[j];
+            Endfield::AABB newAABB = g_SceneAABBs[j];
+
+            // Apply translation offset to the MVP matrix (which is currently just localToWorld from Unity)
+            // Matrix layout is column-major in Unity, but memory layout might be row or column.
+            // In Unity, matrix[12] is tx, matrix[13] is ty, matrix[14] is tz.
+            newInst.mvpMatrix[12] += offsetX;
+            newInst.mvpMatrix[14] += offsetZ;
+
+            newAABB.minBounds[0] += offsetX;
+            newAABB.minBounds[2] += offsetZ;
+            newAABB.maxBounds[0] += offsetX;
+            newAABB.maxBounds[2] += offsetZ;
+
+            g_SceneInstances.push_back(newInst);
+            g_SceneAABBs.push_back(newAABB);
+
+            // Create an empty entity in ECS (to match the object count)
+            g_ECS->CreateEntity(mask);
         }
     }
 }

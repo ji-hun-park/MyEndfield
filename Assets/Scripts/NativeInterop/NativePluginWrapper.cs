@@ -26,5 +26,8 @@ namespace Endfield.NativeInterop
 
         [DllImport(pluginName, CharSet = CharSet.Ansi)]
         public static extern void LoadNativeScene(string path);
+
+        [DllImport(pluginName)]
+        public static extern void SpawnNativeInstances(int count, float spread);
     }
 }
