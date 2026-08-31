@@ -124,8 +124,20 @@ private:
     VkFence m_InFlightFence = VK_NULL_HANDLE;
     uint32_t m_CurrentImageIndex = 0;
 
-    // Descriptor Sets (Placeholders for Endfield architecture)
+    // Descriptor Sets
+    VkDescriptorSetLayout m_DescriptorSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool m_DescriptorPool = VK_NULL_HANDLE;
     VkDescriptorSet m_DescriptorSet0_Pass = VK_NULL_HANDLE;
+    
+    struct CameraUBO {
+        float view[16];
+        float proj[16];
+    };
+    
+    VkBuffer m_CameraUniformBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory m_CameraUniformBufferMemory = VK_NULL_HANDLE;
+    void* m_CameraUniformBufferMapped = nullptr;
+
     VkDescriptorSet m_DescriptorSet2_Object = VK_NULL_HANDLE;
     std::vector<VkDescriptorSet> m_MaterialSets;
     uint32_t m_LastBoundMaterialSet = 0xFFFFFFFF;

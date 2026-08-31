@@ -1,6 +1,11 @@
 #version 450
+layout(set = 0, binding = 0) uniform CameraBuffer {
+    mat4 view;
+    mat4 proj;
+} camera;
+
 layout(push_constant) uniform PushConstants {
-    mat4 mvpMatrix;
+    mat4 modelMatrix;
 } pushConstants;
 
 layout(location = 0) in vec3 inPosition;
@@ -11,7 +16,7 @@ layout(location = 0) out vec3 fragNormal;
 layout(location = 1) out vec2 fragUV;
 
 void main() {
-    gl_Position = pushConstants.mvpMatrix * vec4(inPosition, 1.0);
+    gl_Position = camera.proj * camera.view * pushConstants.modelMatrix * vec4(inPosition, 1.0);
     // Invert Y for Vulkan (since Unity uses OpenGL style Y-up but Vulkan is Y-down)
     gl_Position.y = -gl_Position.y; 
     fragNormal = inNormal;

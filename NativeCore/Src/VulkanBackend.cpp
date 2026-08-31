@@ -59,6 +59,70 @@ void VulkanBackend::Initialize(void* windowHandle)
     CreateDepthResources();
     CreateRenderPass();
     CreateFramebuffers();
+
+    // Descriptor Set Layout
+    VkDescriptorSetLayoutBinding uboLayoutBinding{};
+    uboLayoutBinding.binding = 0;
+    uboLayoutBinding.descriptorCount = 1;
+    uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    uboLayoutBinding.pImmutableSamplers = nullptr;
+    uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+
+    VkDescriptorSetLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layoutInfo.bindingCount = 1;
+    layoutInfo.pBindings = &uboLayoutBinding;
+
+    if (vkCreateDescriptorSetLayout(m_Device, &layoutInfo, nullptr, &m_DescriptorSetLayout) != VK_SUCCESS) {
+        LogToUnity("[VulkanBackend ERROR] Failed to create descriptor set layout!");
+    }
+
+    // Uniform Buffer
+    CreateBuffer(sizeof(CameraUBO), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, m_CameraUniformBuffer, m_CameraUniformBufferMemory);
+    vkMapMemory(m_Device, m_CameraUniformBufferMemory, 0, sizeof(CameraUBO), 0, &m_CameraUniformBufferMapped);
+
+    // Descriptor Pool
+    VkDescriptorPoolSize poolSize{};
+    poolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    poolSize.descriptorCount = 1;
+
+    VkDescriptorPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.poolSizeCount = 1;
+    poolInfo.pPoolSizes = &poolSize;
+    poolInfo.maxSets = 1;
+
+    if (vkCreateDescriptorPool(m_Device, &poolInfo, nullptr, &m_DescriptorPool) != VK_SUCCESS) {
+        LogToUnity("[VulkanBackend ERROR] Failed to create descriptor pool!");
+    }
+
+    // Descriptor Sets
+    VkDescriptorSetAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo.descriptorPool = m_DescriptorPool;
+    allocInfo.descriptorSetCount = 1;
+    allocInfo.pSetLayouts = &m_DescriptorSetLayout;
+
+    if (vkAllocateDescriptorSets(m_Device, &allocInfo, &m_DescriptorSet0_Pass) != VK_SUCCESS) {
+        LogToUnity("[VulkanBackend ERROR] Failed to allocate descriptor sets!");
+    }
+
+    VkDescriptorBufferInfo bufferInfoDesc{};
+    bufferInfoDesc.buffer = m_CameraUniformBuffer;
+    bufferInfoDesc.offset = 0;
+    bufferInfoDesc.range = sizeof(CameraUBO);
+
+    VkWriteDescriptorSet descriptorWrite{};
+    descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrite.dstSet = m_DescriptorSet0_Pass;
+    descriptorWrite.dstBinding = 0;
+    descriptorWrite.dstArrayElement = 0;
+    descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    descriptorWrite.descriptorCount = 1;
+    descriptorWrite.pBufferInfo = &bufferInfoDesc;
+
+    vkUpdateDescriptorSets(m_Device, 1, &descriptorWrite, 0, nullptr);
+
     CreateGraphicsPipeline();
     CreateSyncObjects();
 
@@ -709,7 +773,8 @@ void VulkanBackend::CreateGraphicsPipeline()
 
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    pipelineLayoutInfo.setLayoutCount = 0;
+    pipelineLayoutInfo.setLayoutCount = 1;
+    pipelineLayoutInfo.pSetLayouts = &m_DescriptorSetLayout;
     pipelineLayoutInfo.pushConstantRangeCount = 1;
     pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
 
@@ -906,8 +971,12 @@ void VulkanBackend::SetupRenderGraph()
 
 void VulkanBackend::UpdateCamera(float* viewMatrix, float* projMatrix)
 {
-    // 여기서 넘겨받은 카메라 행렬을 내부 데이터(Uniform Buffer 등)에 복사해 둡니다.
-    // 예를 들어 m_GlobalUniforms.view = *reinterpret_cast<Matrix4x4*>(viewMatrix);
+    if (m_CameraUniformBufferMapped) {
+        CameraUBO ubo{};
+        memcpy(ubo.view, viewMatrix, sizeof(float) * 16);
+        memcpy(ubo.proj, projMatrix, sizeof(float) * 16);
+        memcpy(m_CameraUniformBufferMapped, &ubo, sizeof(CameraUBO));
+    }
 }
 
 void VulkanBackend::CleanupSwapchain() {
@@ -985,6 +1054,9 @@ bool VulkanBackend::BeginFrame()
     // Bind Graphics Pipeline
     if (m_GraphicsPipeline != VK_NULL_HANDLE) {
         vkCmdBindPipeline(m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_GraphicsPipeline);
+        if (m_DescriptorSet0_Pass != VK_NULL_HANDLE && m_PipelineLayout != VK_NULL_HANDLE) {
+            vkCmdBindDescriptorSets(m_CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_PipelineLayout, 0, 1, &m_DescriptorSet0_Pass, 0, nullptr);
+        }
     }
 
     // Set Dynamic States (Viewport & Scissor)

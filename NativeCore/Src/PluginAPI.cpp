@@ -197,17 +197,8 @@ if (g_Backend) {
                 // If visibilityResults[i] is true (frustum culling check)
                 if (i < visibilityResults.size() && visibilityResults[i]) {
                     Endfield::VulkanBackend::InstanceData inst = g_SceneInstances[i];
-                    float localToWorld[16];
-                    for (int k=0; k<16; ++k) localToWorld[k] = inst.mvpMatrix[k];
-                    
-                    for (int c = 0; c < 4; ++c) {
-                        for (int r = 0; r < 4; ++r) {
-                            inst.mvpMatrix[c * 4 + r] = 0;
-                            for (int k = 0; k < 4; ++k) {
-                                inst.mvpMatrix[c * 4 + r] += vp[k * 4 + r] * localToWorld[c * 4 + k];
-                            }
-                        }
-                    }
+                    // Shader expects model matrix in pushConstants.modelMatrix (which is mapped to inst.mvpMatrix in struct)
+                    // localToWorld is already inst.mvpMatrix
                     visibleInstances.push_back(inst);
                 }
             }
@@ -228,14 +219,10 @@ if (g_Backend) {
                             inst.subMeshIndex = 0;
                             inst.sortKey.value = 0;
 
-                            for (int c = 0; c < 4; ++c) {
-                                for (int r = 0; r < 4; ++r) {
-                                    inst.mvpMatrix[c * 4 + r] = 0;
-                                    for (int k = 0; k < 4; ++k) {
-                                        inst.mvpMatrix[c * 4 + r] += vp[k * 4 + r] * localToWorld[c * 4 + k];
-                                    }
-                                }
+                            for (int k = 0; k < 16; ++k) {
+                                inst.mvpMatrix[k] = localToWorld[k];
                             }
+                            
                             visibleInstances.push_back(inst);
                         }
                     }
