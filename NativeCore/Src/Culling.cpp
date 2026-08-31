@@ -118,13 +118,83 @@ void CullingSystem::PerformFrustumCullingParallel(const Frustum& frustum, const 
     }
 }
 
-void CullingSystem::BatchOccluders() {
+void CullingSystem::BatchOccluders(const std::vector<OccluderMesh>& occluders, const float* vpMatrix, float screenWidth, float screenHeight) {
     // 1단계 (Batch): 모든 오클루더(occluder)를 가져와 트랜스폼, 클리핑, 프러스텀 처리를 적용해
-    // 하나의 긴 스크린 스페이스 삼각형(또는 바운딩 박스) 덩어리로 만듭니다.
+    // 하나의 긴 스크린 스페이스 삼각형 덩어리로 만듭니다.
     // Endfield 문서: "데이터는 자신이 어떤 메시에서 왔는지에 대한 정보를 잃습니다. 그냥 화면 위의 삼각형 덩어리일 뿐입니다."
     
-    // (모의 구현) 실제로는 오클루더 메쉬들을 Screen-space 삼각형 리스트로 변환하여 m_ScreenTriangles 같은 버퍼에 쌓습니다.
-    VulkanBackend::LogToUnity("[CullingSystem] Phase 1: BatchOccluders - Created screen-space triangles.");
+    m_ScreenTriangles.clear();
+
+    // 4x4 매트릭스 곱셈 헬퍼
+    auto multiplyMatrix = [](const float* a, const float* b, float* out) {
+        for(int c = 0; c < 4; ++c) {
+            for(int r = 0; r < 4; ++r) {
+                out[c*4 + r] = a[0*4 + r] * b[c*4 + 0] + 
+                               a[1*4 + r] * b[c*4 + 1] + 
+                               a[2*4 + r] * b[c*4 + 2] + 
+                               a[3*4 + r] * b[c*4 + 3];
+            }
+        }
+    };
+
+    auto transformPoint = [](const float* m, const Vector3& p, float& outW) -> Vector3 {
+        Vector3 res;
+        res.x = m[0]*p.x + m[4]*p.y + m[8]*p.z  + m[12];
+        res.y = m[1]*p.x + m[5]*p.y + m[9]*p.z  + m[13];
+        res.z = m[2]*p.x + m[6]*p.y + m[10]*p.z + m[14];
+        outW  = m[3]*p.x + m[7]*p.y + m[11]*p.z + m[15];
+        return res;
+    };
+
+    for (const auto& mesh : occluders) {
+        float mvp[16];
+        multiplyMatrix(vpMatrix, mesh.localToWorld, mvp);
+
+        // 삼각형 단위로 처리
+        for (size_t i = 0; i < mesh.indices.size(); i += 3) {
+            Vector3 v0 = mesh.vertices[mesh.indices[i]];
+            Vector3 v1 = mesh.vertices[mesh.indices[i+1]];
+            Vector3 v2 = mesh.vertices[mesh.indices[i+2]];
+
+            float w0, w1, w2;
+            Vector3 clip0 = transformPoint(mvp, v0, w0);
+            Vector3 clip1 = transformPoint(mvp, v1, w1);
+            Vector3 clip2 = transformPoint(mvp, v2, w2);
+
+            // 단순 클리핑: 하나라도 Near Plane(w <= 0.0) 뒤에 있으면 일단 폐기 (제대로 하려면 삼각형 클리핑 알고리즘 필요)
+            if (w0 <= 0.001f || w1 <= 0.001f || w2 <= 0.001f) {
+                continue; 
+            }
+
+            // 원근 나누기 (Perspective Divide) -> NDC (Normalized Device Coordinates)
+            Vector3 ndc0 = { clip0.x / w0, clip0.y / w0, clip0.z / w0 };
+            Vector3 ndc1 = { clip1.x / w1, clip1.y / w1, clip1.z / w1 };
+            Vector3 ndc2 = { clip2.x / w2, clip2.y / w2, clip2.z / w2 };
+
+            // 백페이스 컬링 (Backface Culling)
+            float crossZ = (ndc1.x - ndc0.x) * (ndc2.y - ndc0.y) - (ndc1.y - ndc0.y) * (ndc2.x - ndc0.x);
+            if (crossZ < 0.0f) { // 시계방향 기준, 후면이면 제거
+                continue;
+            }
+
+            // Screen Space 로 맵핑 [-1, 1] -> [0, width], [0, height]
+            auto toScreen = [screenWidth, screenHeight](const Vector3& ndc) -> Vector3 {
+                return {
+                    (ndc.x + 1.0f) * 0.5f * screenWidth,
+                    (1.0f - ndc.y) * 0.5f * screenHeight, // Vulkan/Unity Y-axis 대응
+                    ndc.z
+                };
+            };
+
+            m_ScreenTriangles.push_back({
+                toScreen(ndc0), 
+                toScreen(ndc1), 
+                toScreen(ndc2)
+            });
+        }
+    }
+
+    VulkanBackend::LogToUnity("[CullingSystem] Phase 1: BatchOccluders - Created " + std::to_string(m_ScreenTriangles.size()) + " screen-space triangles.");
 }
 
 void CullingSystem::RasterizeTilesParallel() {

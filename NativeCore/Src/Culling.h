@@ -8,6 +8,18 @@ struct AABB {
     float maxBounds[3];
 };
 
+struct Vector3 { float x, y, z; };
+
+struct ScreenTriangle {
+    Vector3 v0, v1, v2;
+};
+
+struct OccluderMesh {
+    std::vector<Vector3> vertices;
+    std::vector<uint32_t> indices;
+    float localToWorld[16]; // Column-major Transform Matrix
+};
+
 struct Frustum {
     // 6개의 평면 방정식 (Left, Right, Bottom, Top, Near, Far)
     // 각 평면은 (nx, ny, nz, d) 형태
@@ -31,7 +43,7 @@ public:
     void PerformFrustumCullingParallel(const Frustum& frustum, const std::vector<AABB>& aabbs, std::vector<bool>& outVisibility);
     
     // 2. Combine all occluders into screen space triangles
-    void BatchOccluders();
+    void BatchOccluders(const std::vector<OccluderMesh>& occluders, const float* vpMatrix, float screenWidth, float screenHeight);
     
     // 3. Tile screen into 8 tiles and rasterize in parallel (lock-free)
     void RasterizeTilesParallel();
@@ -43,6 +55,7 @@ private:
     uint32_t m_NumWorkers;
     // 소프트웨어 오클루전 컬링용 Low-res Depth Buffer (예: 256x128)
     std::vector<float> m_DepthBuffer; 
+    std::vector<ScreenTriangle> m_ScreenTriangles; // 배칭된 스크린 스페이스 삼각형들
 };
 
 } // namespace Endfield

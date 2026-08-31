@@ -9,6 +9,7 @@
 #include <vulkan/vulkan.h>
 #include "RenderGraph.h"
 #include "SortKey.h"
+#include "Culling.h"
 
 namespace Endfield {
 
@@ -144,6 +145,7 @@ private:
     uint32_t m_LastBoundMaterialSet = 0xFFFFFFFF;
     std::vector<InstanceData> m_SortedInstances;
 
+    CullingSystem m_CullingSystem;
     RenderGraph m_RenderGraph;
 
     // Mesh Buffers

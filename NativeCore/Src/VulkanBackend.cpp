@@ -1128,10 +1128,12 @@ void VulkanBackend::SubmitBatch(const void* batchData, int instanceCount)
 
     // --- [-1] 소프트웨어 오클루전 컬링 (Software Occlusion Culling) ---
     // 컬링을 가장 먼저 수행하여 화면에 보이지 않는 오브젝트를 제거합니다.
-    // (모의 호출: 실제로는 CullingSystem을 통해 m_CulledInstances 배열 등을 생성하게 됩니다.)
-    // CullingSystem::BatchOccluders();
-    // CullingSystem::RasterizeTilesParallel();
-    // CullingSystem::PerformOcclusionTestParallel();
+    
+    // 임시로 오클루더 메쉬와 뷰프로젝션 행렬을 넘겨주는 형태 (실제 데이터는 외부에서 주입 필요)
+    // std::vector<OccluderMesh> dummyOccluders;
+    // m_CullingSystem.BatchOccluders(dummyOccluders, instances[0].mvpMatrix, m_SwapchainExtent.width, m_SwapchainExtent.height);
+    // m_CullingSystem.RasterizeTilesParallel();
+    // m_CullingSystem.PerformOcclusionTestParallel();
 
     // --- [0] 64비트 정렬 키 기반의 오브젝트 정렬 (Sorting) ---
     // Endfield 문서: "정렬 비교는 16바이트짜리 값에 대한 분기 비교이며, 표준 정렬(std::sort)을 그대로 사용합니다."
