@@ -1101,6 +1101,9 @@ bool VulkanBackend::BeginFrame()
     // Reset and begin command buffer
     vkResetCommandBuffer(m_CommandBuffer, 0);
 
+    // 새 프레임 렌더링을 위해 펜딩 배치 데이터 초기화
+    m_PendingBatchData.clear();
+
     VkCommandBufferBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;

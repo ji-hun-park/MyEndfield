@@ -117,6 +117,12 @@ void RenderGraph::CompileGraph()
                     continue; // Skip barrier
                 }
 
+                // 이미지가 바인딩되지 않은 가상 리소스이거나 스왑체인(RenderPass가 자동 처리)인 경우 배리어 생략
+                if (res.image == VK_NULL_HANDLE) {
+                    res.currentAccess = access.accessType;
+                    continue; 
+                }
+
                 VkImageMemoryBarrier barrier{};
                 barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
                 barrier.oldLayout = srcLayout;
