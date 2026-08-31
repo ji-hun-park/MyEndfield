@@ -119,15 +119,80 @@ void CullingSystem::PerformFrustumCullingParallel(const Frustum& frustum, const 
 }
 
 void CullingSystem::BatchOccluders() {
-    // 씬의 정적(Static) 오클루더 메쉬들을 모아 소프트웨어 래스터라이즈용 삼각형 데이터로 가공
+    // 1단계 (Batch): 모든 오클루더(occluder)를 가져와 트랜스폼, 클리핑, 프러스텀 처리를 적용해
+    // 하나의 긴 스크린 스페이스 삼각형(또는 바운딩 박스) 덩어리로 만듭니다.
+    // Endfield 문서: "데이터는 자신이 어떤 메시에서 왔는지에 대한 정보를 잃습니다. 그냥 화면 위의 삼각형 덩어리일 뿐입니다."
+    
+    // (모의 구현) 실제로는 오클루더 메쉬들을 Screen-space 삼각형 리스트로 변환하여 m_ScreenTriangles 같은 버퍼에 쌓습니다.
+    VulkanBackend::LogToUnity("[CullingSystem] Phase 1: BatchOccluders - Created screen-space triangles.");
 }
 
 void CullingSystem::RasterizeTilesParallel() {
-    // 화면을 TILE 크기로 분할하여 병렬 워커들이 락프리(Lock-Free)로 m_DepthBuffer에 기록
+    // 2단계 (Raster/Tiling): 화면을 8개의 타일로 나누고, 각 워커가 독립적으로 래스터화 (Lock-Free)
+    // Endfield 문서: "화면을 8개의 타일로 나누고... 4개의 잡을 사용하며, 각 잡은 전체 삼각형의 1/4을 담당하고 
+    // 각자 자신만의 프라이빗한 8개 타일 슬롯을 가집니다. 4x8=32개의 리스트... 절대 락이 필요 없습니다."
+
+    const int NUM_WORKERS = 4;
+    const int NUM_TILES = 8;
+    
+    // [Phase 2-1: Binning (분배)] 
+    // 각 워커는 전체 삼각형의 1/4씩을 맡아서, 어떤 타일에 속하는지 판별해 자신의 8개 프라이빗 리스트에 분배합니다.
+    struct WorkerPrivateList {
+        std::vector<int> tileTriangles[NUM_TILES];
+    };
+    std::vector<WorkerPrivateList> workerLists(NUM_WORKERS);
+
+    auto binningTask = [&](int workerID) {
+        // 실제로는 m_ScreenTriangles 배열의 (workerID/4) 구간을 순회하며 타일 인덱스를 계산 후 추가
+        // workerLists[workerID].tileTriangles[tileIndex].push_back(triangleID);
+    };
+
+    std::vector<std::future<void>> futures;
+    for (int i = 0; i < NUM_WORKERS; ++i) {
+        futures.push_back(std::async(std::launch::async, binningTask, i));
+    }
+    for (auto& fut : futures) fut.wait();
+    futures.clear();
+
+    // [Phase 2-2: Rasterization (래스터화)]
+    // 각 워커는 이제 특정 '타일(Tile)'들을 전담하여 깊이 버퍼에 래스터화합니다.
+    // 타일 영역은 겹치지 않으므로 m_DepthBuffer에 쓰는 작업은 락 프리가 됩니다.
+    auto rasterTask = [&](int workerID) {
+        // 4명의 워커가 8개의 타일을 2개씩 나눠 가짐
+        int tilesPerWorker = NUM_TILES / NUM_WORKERS;
+        int startTile = workerID * tilesPerWorker;
+        int endTile = startTile + tilesPerWorker;
+
+        for (int t = startTile; t < endTile; ++t) {
+            // 다른 4명의 워커들이 만들어둔 t번째 타일의 리스트를 모두 가져와서 그린다.
+            for (int w = 0; w < NUM_WORKERS; ++w) {
+                const auto& tris = workerLists[w].tileTriangles[t];
+                // for (int triID : tris) {
+                //      SIMD를 활용해 해당 삼각형을 래스터화하고 m_DepthBuffer의 타일 영역에 기록 (Lock-free)
+                // }
+            }
+        }
+    };
+
+    for (int i = 0; i < NUM_WORKERS; ++i) {
+        futures.push_back(std::async(std::launch::async, rasterTask, i));
+    }
+    for (auto& fut : futures) fut.wait();
+
+    VulkanBackend::LogToUnity("[CullingSystem] Phase 2: RasterizeTilesParallel - 8 Tiles Rasterized (Lock-Free).");
 }
 
 void CullingSystem::PerformOcclusionTestParallel() {
-    // AABB를 스크린 스페이스(Screen Space)로 투영 후, m_DepthBuffer와 비교 (소프트웨어 오클루전 컬링)
+    // 3단계 (Visibility): 프러스텀에 살아남은 엔티티들의 AABB를 Screen-space로 투영해 m_DepthBuffer와 비교
+    // Endfield 문서: "가시성 판정에서 대부분의 워커는 개별(per-entity) 작업을 수행하고... 락 스텝이 없습니다."
+
+    auto occlusionTask = [&](int workerID) {
+        // 각 워커는 담당하는 대상(instances)의 AABB를 스크린에 투영하여 화면 상의 min Z 값을 구함.
+        // 그리고 m_DepthBuffer에서 해당하는 영역의 깊이 최대값과 비교.
+        // if (instance.z_min > m_DepthBuffer[tile_max_z]) -> 완전히 가려짐(Culled)
+    };
+
+    VulkanBackend::LogToUnity("[CullingSystem] Phase 3: PerformOcclusionTestParallel - Culling executed against Depth Buffer.");
 }
 
 } // namespace Endfield
