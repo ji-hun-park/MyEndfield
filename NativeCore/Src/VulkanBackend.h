@@ -52,7 +52,7 @@ public:
 
     void UploadMesh(const std::vector<Vertex>& vertices, const std::vector<std::vector<int32_t>>& subMeshIndices, uint32_t meshId);
 
-    void BeginFrame();
+    bool BeginFrame();
     void SubmitBatch(const void* batchData, int instanceCount);
     void EndFrame();
 

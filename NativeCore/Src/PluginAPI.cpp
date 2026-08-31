@@ -11,13 +11,13 @@
 static std::unique_ptr<Endfield::VulkanBackend> g_Backend = nullptr;
 static std::unique_ptr<Endfield::ECSManager> g_ECS = nullptr;
 static std::unique_ptr<Endfield::CullingSystem> g_Culling = nullptr;
+static std::mutex g_NativeMutex;
 
 // 글로벌 씬 AABB 및 인스턴스 데이터 보관 (임시)
 static std::vector<Endfield::AABB> g_SceneAABBs;
 static std::vector<Endfield::VulkanBackend::InstanceData> g_SceneInstances;
 
 // 멀티스레딩(메인 스레드 vs 렌더 스레드) 충돌 방지용 뮤텍스
-static std::mutex g_NativeMutex;
 
 #if defined(_WIN32) || defined(_WIN64)
 #include <windows.h>
@@ -131,9 +131,8 @@ ENDFIELD_API void ExecuteNativeRenderLoop()
 #endif
 
     std::lock_guard<std::mutex> lock(g_NativeMutex);
-
-    if (g_Backend) {
-        g_Backend->BeginFrame();
+if (g_Backend) {
+        if (g_Backend->BeginFrame()) {
         
         if (g_ECS && g_Culling) {
             // ECS 쿼리를 통해 컴포넌트를 가져와 Batch Data로 만들어 렌더링에 사용할 수 있습니다.
@@ -192,6 +191,7 @@ ENDFIELD_API void ExecuteNativeRenderLoop()
         }
 
         g_Backend->EndFrame();
+        }
     }
 }
 
@@ -227,8 +227,7 @@ ENDFIELD_API void UpdateCameraState(float* viewMatrix, float* projMatrix)
 ENDFIELD_API void LoadNativeScene(const char* path)
 {
     std::lock_guard<std::mutex> lock(g_NativeMutex);
-
-    if (g_ECS && path != nullptr && g_Backend) {
+if (g_ECS && path != nullptr && g_Backend) {
         std::string filePath(path);
         std::vector<Endfield::SceneLoader::MeshData> meshes;
         if (Endfield::SceneLoader::LoadScene(filePath, *g_ECS, g_SceneAABBs, g_SceneInstances, meshes)) {
@@ -254,8 +253,7 @@ ENDFIELD_API void LoadNativeScene(const char* path)
 ENDFIELD_API void SpawnNativeInstances(int count, float spread)
 {
     std::lock_guard<std::mutex> lock(g_NativeMutex);
-
-    if (!g_ECS || g_SceneInstances.empty()) return;
+if (!g_ECS || g_SceneInstances.empty()) return;
 
     size_t baseCount = g_SceneInstances.size();
     g_SceneInstances.reserve(baseCount + count * baseCount);

@@ -910,16 +910,20 @@ void VulkanBackend::UpdateCamera(float* viewMatrix, float* projMatrix)
     // 예를 들어 m_GlobalUniforms.view = *reinterpret_cast<Matrix4x4*>(viewMatrix);
 }
 
-void VulkanBackend::BeginFrame()
+bool VulkanBackend::BeginFrame()
 {
-    if (m_Device == VK_NULL_HANDLE || m_CommandBuffer == VK_NULL_HANDLE || m_Swapchain == VK_NULL_HANDLE) return;
+    if (m_Device == VK_NULL_HANDLE || m_CommandBuffer == VK_NULL_HANDLE || m_Swapchain == VK_NULL_HANDLE) return false;
 
     // Wait for the previous frame to finish
     vkWaitForFences(m_Device, 1, &m_InFlightFence, VK_TRUE, UINT64_MAX);
     vkResetFences(m_Device, 1, &m_InFlightFence);
 
     // Acquire next image from swapchain
-    vkAcquireNextImageKHR(m_Device, m_Swapchain, UINT64_MAX, m_ImageAvailableSemaphore, VK_NULL_HANDLE, &m_CurrentImageIndex);
+    VkResult acquireResult = vkAcquireNextImageKHR(m_Device, m_Swapchain, UINT64_MAX, m_ImageAvailableSemaphore, VK_NULL_HANDLE, &m_CurrentImageIndex);
+    if (acquireResult == VK_ERROR_OUT_OF_DATE_KHR || acquireResult == VK_SUBOPTIMAL_KHR) {
+        // RecreateSwapchain();
+        return false;
+    }
 
     // Reset and begin command buffer
     vkResetCommandBuffer(m_CommandBuffer, 0);
@@ -930,7 +934,7 @@ void VulkanBackend::BeginFrame()
 
     if (vkBeginCommandBuffer(m_CommandBuffer, &beginInfo) != VK_SUCCESS) {
         LogToUnity("[VulkanBackend ERROR] Failed to begin recording command buffer!");
-        return;
+        return false;
     }
     
     // Begin Render Pass
@@ -970,10 +974,11 @@ void VulkanBackend::BeginFrame()
     scissor.extent = m_SwapchainExtent;
     vkCmdSetScissor(m_CommandBuffer, 0, 1, &scissor);
 
-    // Test Draw is removed. Actual drawing will happen in SubmitBatch.
+        // Test Draw is removed. Actual drawing will happen in SubmitBatch.
 
     // Reset our redundant binding tracker for the new frame (for SubmitBatch)
     m_LastBoundMaterialSet = 0xFFFFFFFF;
+    return true;
 }
 
 void VulkanBackend::SubmitBatch(const void* batchData, int instanceCount)
