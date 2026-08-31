@@ -15,13 +15,63 @@ static std::unique_ptr<Endfield::CullingSystem> g_Culling = nullptr;
 static std::vector<Endfield::AABB> g_SceneAABBs;
 static std::vector<Endfield::VulkanBackend::InstanceData> g_SceneInstances;
 
+#if defined(_WIN32) || defined(_WIN64)
+#include <windows.h>
+static HWND g_StandaloneWindow = NULL;
+
+static LRESULT CALLBACK StandaloneWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    switch (uMsg) {
+        case WM_CLOSE:
+        case WM_DESTROY:
+            PostQuitMessage(0);
+            return 0;
+    }
+    return DefWindowProcA(hwnd, uMsg, wParam, lParam);
+}
+
+static HWND CreateStandaloneWindow(uint32_t width, uint32_t height) {
+    const char CLASS_NAME[] = "EndfieldNativeRendererClass";
+    
+    WNDCLASSA wc = { };
+    wc.lpfnWndProc = StandaloneWindowProc;
+    wc.hInstance = GetModuleHandleA(NULL);
+    wc.lpszClassName = CLASS_NAME;
+    
+    RegisterClassA(&wc);
+    
+    HWND hwnd = CreateWindowExA(
+        0,
+        CLASS_NAME,
+        "Endfield Native Renderer (Standalone C++ Engine)",
+        WS_OVERLAPPEDWINDOW,
+        CW_USEDEFAULT, CW_USEDEFAULT, width, height,
+        NULL, NULL, wc.hInstance, NULL
+    );
+    
+    if (hwnd) {
+        ShowWindow(hwnd, SW_SHOW);
+        UpdateWindow(hwnd);
+    }
+    return hwnd;
+}
+#endif
+
 extern "C" {
 
 ENDFIELD_API void InitializeVulkanRenderer(void* windowHandle, uint32_t width, uint32_t height)
 {
     if (!g_Backend) {
+#if defined(_WIN32) || defined(_WIN64)
+        if (!g_StandaloneWindow) {
+            g_StandaloneWindow = CreateStandaloneWindow(width, height);
+        }
+        void* actualWindowHandle = (void*)g_StandaloneWindow;
+#else
+        void* actualWindowHandle = windowHandle;
+#endif
+
         g_Backend = std::make_unique<Endfield::VulkanBackend>();
-        g_Backend->Initialize(windowHandle);
+        g_Backend->Initialize(actualWindowHandle);
         g_Backend->SetupRenderGraph();
     }
     
@@ -56,6 +106,16 @@ static float g_ProjMatrix[16];
 
 ENDFIELD_API void ExecuteNativeRenderLoop()
 {
+#if defined(_WIN32) || defined(_WIN64)
+    if (g_StandaloneWindow) {
+        MSG msg;
+        while (PeekMessageA(&msg, g_StandaloneWindow, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&msg);
+            DispatchMessageA(&msg);
+        }
+    }
+#endif
+
     if (g_Backend) {
         g_Backend->BeginFrame();
         
@@ -66,13 +126,16 @@ ENDFIELD_API void ExecuteNativeRenderLoop()
             
             auto chunks = g_ECS->QueryChunks(transformMask);
             
-            // 캐싱된 View, Proj 매트릭스로 프러스텀 추출 (단순 행렬곱 예시)
+            // Calculate View * Proj (both are column-major 4x4 arrays from Unity)
+            // For column-major matrices A and B, (A * B)[c*4 + r] = sum_k A[k*4 + r] * B[c*4 + k]
+            // We want VP = Proj * View.
             float vp[16];
-            for (int i = 0; i < 4; ++i) {
-                for (int j = 0; j < 4; ++j) {
-                    vp[i * 4 + j] = 0;
+            for (int c = 0; c < 4; ++c) {
+                for (int r = 0; r < 4; ++r) {
+                    vp[c * 4 + r] = 0;
                     for (int k = 0; k < 4; ++k) {
-                        vp[i * 4 + j] += g_ProjMatrix[i * 4 + k] * g_ViewMatrix[k * 4 + j];
+                        // Proj is A, View is B
+                        vp[c * 4 + r] += g_ProjMatrix[k * 4 + r] * g_ViewMatrix[c * 4 + k];
                     }
                 }
             }
@@ -88,17 +151,19 @@ ENDFIELD_API void ExecuteNativeRenderLoop()
             std::vector<Endfield::VulkanBackend::InstanceData> visibleInstances;
             visibleInstances.reserve(g_SceneInstances.size());
             for (size_t i = 0; i < g_SceneInstances.size(); ++i) {
+                // If visibilityResults[i] is true (frustum culling check)
+                // Temporarily disable culling check for debugging if you want, but assuming it works:
                 if (i < visibilityResults.size() && visibilityResults[i]) {
-                    // MVP 매트릭스 계산 (LocalToWorld * ViewProj)
+                    // MVP = VP * LocalToWorld
                     Endfield::VulkanBackend::InstanceData inst = g_SceneInstances[i];
                     float localToWorld[16];
                     for (int k=0; k<16; ++k) localToWorld[k] = inst.mvpMatrix[k];
                     
-                    for (int r = 0; r < 4; ++r) {
-                        for (int c = 0; c < 4; ++c) {
-                            inst.mvpMatrix[r * 4 + c] = 0;
+                    for (int c = 0; c < 4; ++c) {
+                        for (int r = 0; r < 4; ++r) {
+                            inst.mvpMatrix[c * 4 + r] = 0;
                             for (int k = 0; k < 4; ++k) {
-                                inst.mvpMatrix[r * 4 + c] += vp[r * 4 + k] * localToWorld[k * 4 + c];
+                                inst.mvpMatrix[c * 4 + r] += vp[k * 4 + r] * localToWorld[c * 4 + k];
                             }
                         }
                     }
