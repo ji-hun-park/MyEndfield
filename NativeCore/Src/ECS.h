@@ -94,6 +94,17 @@ public:
         return nullptr;
     }
 
+    template<typename T>
+    void SetComponentData(Entity entity, uint32_t componentBitIndex, const T& data) {
+        auto it = m_EntityMap.find(entity.id);
+        if (it != m_EntityMap.end()) {
+            T* array = GetComponentArray<T>(it->second.chunk, componentBitIndex);
+            if (array) {
+                array[it->second.index] = data;
+            }
+        }
+    }
+
 private:
     std::vector<std::unique_ptr<Archetype>> m_Archetypes;
     std::unordered_map<uint32_t, EntityRecord> m_EntityMap;

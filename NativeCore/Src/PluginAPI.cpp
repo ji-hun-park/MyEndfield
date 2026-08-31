@@ -21,7 +21,15 @@ static std::vector<Endfield::VulkanBackend::InstanceData> g_SceneInstances;
 
 #if defined(_WIN32) || defined(_WIN64)
 #include <windows.h>
+#include <thread>
+#include <atomic>
+#include <condition_variable>
+
 static HWND g_StandaloneWindow = NULL;
+static std::thread g_WindowThread;
+static std::atomic<bool> g_WindowThreadRunning{false};
+static std::condition_variable g_WindowCV;
+static std::mutex g_WindowInitMutex;
 
 static LRESULT CALLBACK StandaloneWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
@@ -44,7 +52,6 @@ static HWND CreateStandaloneWindow(uint32_t width, uint32_t height) {
     
     ATOM atom = RegisterClassA(&wc);
     if (!atom && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
-        // Registration failed
         return NULL;
     }
     
@@ -68,6 +75,25 @@ static HWND CreateStandaloneWindow(uint32_t width, uint32_t height) {
     }
     return hwnd;
 }
+
+static void WindowThreadFunc(uint32_t width, uint32_t height) {
+    g_StandaloneWindow = CreateStandaloneWindow(width, height);
+    
+    {
+        std::lock_guard<std::mutex> lock(g_WindowInitMutex);
+        g_WindowThreadRunning = true;
+    }
+    g_WindowCV.notify_one();
+
+    if (g_StandaloneWindow) {
+        MSG msg;
+        while (GetMessageA(&msg, NULL, 0, 0) > 0) {
+            TranslateMessage(&msg);
+            DispatchMessageA(&msg);
+        }
+    }
+    g_WindowThreadRunning = false;
+}
 #endif
 
 extern "C" {
@@ -77,7 +103,9 @@ ENDFIELD_API void InitializeVulkanRenderer(void* windowHandle, uint32_t width, u
     if (!g_Backend) {
 #if defined(_WIN32) || defined(_WIN64)
         if (!g_StandaloneWindow) {
-            g_StandaloneWindow = CreateStandaloneWindow(width, height);
+            std::unique_lock<std::mutex> lock(g_WindowInitMutex);
+            g_WindowThread = std::thread(WindowThreadFunc, width, height);
+            g_WindowCV.wait(lock, []{ return g_WindowThreadRunning.load(); });
         }
         void* actualWindowHandle = (void*)g_StandaloneWindow;
 #else
@@ -91,8 +119,8 @@ ENDFIELD_API void InitializeVulkanRenderer(void* windowHandle, uint32_t width, u
     
     if (!g_ECS) {
         g_ECS = std::make_unique<Endfield::ECSManager>();
-        // 더미 컴포넌트 레지스트리 세팅: 0번 비트를 Transform(64바이트 Matrix)으로 지정
-        Endfield::ComponentRegistry::RegisterComponent(0, sizeof(float) * 16);
+        // Pinned Pointer (float*)를 직접 저장하기 위해 sizeof(float*) 로 등록합니다.
+        Endfield::ComponentRegistry::RegisterComponent(0, sizeof(float*));
     }
     
     if (!g_Culling) {
@@ -113,6 +141,16 @@ ENDFIELD_API void ShutdownVulkanRenderer()
         g_Backend->Shutdown();
         g_Backend.reset();
     }
+
+#if defined(_WIN32) || defined(_WIN64)
+    if (g_StandaloneWindow) {
+        PostMessageA(g_StandaloneWindow, WM_CLOSE, 0, 0);
+        if (g_WindowThread.joinable()) {
+            g_WindowThread.join();
+        }
+        g_StandaloneWindow = NULL;
+    }
+#endif
 }
 
 static float g_ViewMatrix[16];
@@ -120,16 +158,6 @@ static float g_ProjMatrix[16];
 
 ENDFIELD_API void ExecuteNativeRenderLoop()
 {
-#if defined(_WIN32) || defined(_WIN64)
-    if (g_StandaloneWindow) {
-        MSG msg;
-        while (PeekMessageA(&msg, g_StandaloneWindow, 0, 0, PM_REMOVE)) {
-            TranslateMessage(&msg);
-            DispatchMessageA(&msg);
-        }
-    }
-#endif
-
     std::lock_guard<std::mutex> lock(g_NativeMutex);
 if (g_Backend) {
         if (g_Backend->BeginFrame()) {
@@ -167,9 +195,7 @@ if (g_Backend) {
             visibleInstances.reserve(g_SceneInstances.size());
             for (size_t i = 0; i < g_SceneInstances.size(); ++i) {
                 // If visibilityResults[i] is true (frustum culling check)
-                // Temporarily disable culling check for debugging if you want, but assuming it works:
                 if (i < visibilityResults.size() && visibilityResults[i]) {
-                    // MVP = VP * LocalToWorld
                     Endfield::VulkanBackend::InstanceData inst = g_SceneInstances[i];
                     float localToWorld[16];
                     for (int k=0; k<16; ++k) localToWorld[k] = inst.mvpMatrix[k];
@@ -186,9 +212,41 @@ if (g_Backend) {
                 }
             }
 
-            // 그래픽스 커맨드 버퍼에 Draw Call 제출
-            g_Backend->SubmitBatch(visibleInstances.data(), static_cast<int>(visibleInstances.size()));
-        }
+            // ECS로 등록된 수동 엔티티 렌더링
+            if (g_ECS) {
+                Endfield::ComponentMask queryMask;
+                queryMask.low = 1;
+                auto chunks = g_ECS->QueryChunks(queryMask);
+                for (auto chunk : chunks) {
+                    float** transformPointers = g_ECS->GetComponentArray<float*>(chunk, 0);
+                    if (transformPointers) {
+                        for (uint32_t i = 0; i < chunk->entityCount; ++i) {
+                            float* localToWorld = transformPointers[i];
+                            if (!localToWorld) continue;
+
+                            Endfield::VulkanBackend::InstanceData inst;
+                            inst.subMeshIndex = 0;
+                            inst.sortKey.value = 0;
+
+                            for (int c = 0; c < 4; ++c) {
+                                for (int r = 0; r < 4; ++r) {
+                                    inst.mvpMatrix[c * 4 + r] = 0;
+                                    for (int k = 0; k < 4; ++k) {
+                                        inst.mvpMatrix[c * 4 + r] += vp[k * 4 + r] * localToWorld[c * 4 + k];
+                                    }
+                                }
+                            }
+                            visibleInstances.push_back(inst);
+                        }
+                    }
+                }
+            }
+
+            if (!visibleInstances.empty()) {
+                // 그래픽스 커맨드 버퍼에 Draw Call 제출
+                g_Backend->SubmitBatch(visibleInstances.data(), static_cast<int>(visibleInstances.size()));
+            }
+        } // close if (g_ECS && g_Culling)
 
         g_Backend->EndFrame();
         }
@@ -199,15 +257,15 @@ ENDFIELD_API void RegisterEntity(uint32_t id, float* transformData)
 {
     if (g_ECS) {
         Endfield::ComponentMask mask;
-        mask.low = 1; // Transform 컴포넌트를 가진다고 가정
+        mask.low = 1; // Transform 컴포넌트(Bit 0)를 가짐
 
         // ECS에 엔티티 할당
         Endfield::Entity ent = g_ECS->CreateEntity(mask);
         
-        // 메모리 카피 대신 포인터 연산을 통해 핀 고정된(Pinned) Unity의 데이터를 직접 참조하거나, 
-        // ECS 내부 할당 메모리로 복사해둘 수 있습니다. 
-        // 이번 예제에선 일단 생성 로직(CreateEntity)이 호출됨에 의의를 둡니다.
-        // (실제 프로젝트에서는 TransformData* 를 ECS의 SoA Column에 기록함)
+        // Pinned된 Unity의 transformData 포인터를 직접 ECS 컴포넌트에 저장합니다.
+        g_ECS->SetComponentData<float*>(ent, 0, transformData);
+        
+        std::cout << "[PluginAPI] Registered Entity ID " << id << " with Transform Data ptr: " << transformData << std::endl;
     }
 }
 

@@ -57,6 +57,8 @@ public:
     void EndFrame();
 
     void SetupRenderGraph();
+    void RecreateSwapchain();
+    void CleanupSwapchain();
 
     void UpdateCamera(float* viewMatrix, float* projMatrix);
 

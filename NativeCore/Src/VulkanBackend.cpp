@@ -910,6 +910,34 @@ void VulkanBackend::UpdateCamera(float* viewMatrix, float* projMatrix)
     // 예를 들어 m_GlobalUniforms.view = *reinterpret_cast<Matrix4x4*>(viewMatrix);
 }
 
+void VulkanBackend::CleanupSwapchain() {
+    for (auto framebuffer : m_SwapchainFramebuffers) {
+        vkDestroyFramebuffer(m_Device, framebuffer, nullptr);
+    }
+    m_SwapchainFramebuffers.clear();
+    if (m_DepthImageView != VK_NULL_HANDLE) { vkDestroyImageView(m_Device, m_DepthImageView, nullptr); m_DepthImageView = VK_NULL_HANDLE; }
+    if (m_DepthImage != VK_NULL_HANDLE) { vkDestroyImage(m_Device, m_DepthImage, nullptr); m_DepthImage = VK_NULL_HANDLE; }
+    if (m_DepthImageMemory != VK_NULL_HANDLE) { vkFreeMemory(m_Device, m_DepthImageMemory, nullptr); m_DepthImageMemory = VK_NULL_HANDLE; }
+    for (auto imageView : m_SwapchainImageViews) {
+        vkDestroyImageView(m_Device, imageView, nullptr);
+    }
+    m_SwapchainImageViews.clear();
+    if (m_Swapchain != VK_NULL_HANDLE) { vkDestroySwapchainKHR(m_Device, m_Swapchain, nullptr); m_Swapchain = VK_NULL_HANDLE; }
+}
+
+void VulkanBackend::RecreateSwapchain() {
+    VkSurfaceCapabilitiesKHR capabilities;
+    vkGetPhysicalDeviceSurfaceCapabilitiesKHR(m_PhysicalDevice, m_Surface, &capabilities);
+    if (capabilities.currentExtent.width == 0 || capabilities.currentExtent.height == 0) return;
+    
+    LogToUnity("[VulkanBackend] Recreating Swapchain...");
+    vkDeviceWaitIdle(m_Device);
+    CleanupSwapchain();
+    CreateSwapchain();
+    CreateDepthResources();
+    CreateFramebuffers();
+}
+
 bool VulkanBackend::BeginFrame()
 {
     if (m_Device == VK_NULL_HANDLE || m_CommandBuffer == VK_NULL_HANDLE || m_Swapchain == VK_NULL_HANDLE) return false;
@@ -920,8 +948,8 @@ bool VulkanBackend::BeginFrame()
 
     // Acquire next image from swapchain
     VkResult acquireResult = vkAcquireNextImageKHR(m_Device, m_Swapchain, UINT64_MAX, m_ImageAvailableSemaphore, VK_NULL_HANDLE, &m_CurrentImageIndex);
-    if (acquireResult == VK_ERROR_OUT_OF_DATE_KHR || acquireResult == VK_SUBOPTIMAL_KHR) {
-        // RecreateSwapchain();
+    if (acquireResult == VK_ERROR_OUT_OF_DATE_KHR) {
+        RecreateSwapchain();
         return false;
     }
 
