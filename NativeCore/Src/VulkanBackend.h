@@ -21,6 +21,7 @@ public:
     struct InstanceData {
         float mvpMatrix[16];
         SortKey sortKey;
+        uint32_t subMeshIndex;
     };
 
     struct Vertex {
@@ -29,12 +30,17 @@ public:
         float uvX, uvY;
     };
 
+    struct SubMeshBuffer {
+        uint32_t firstIndex;
+        uint32_t indexCount;
+    };
+
     struct MeshBuffer {
         VkBuffer vertexBuffer;
         VkDeviceMemory vertexBufferMemory;
         VkBuffer indexBuffer;
         VkDeviceMemory indexBufferMemory;
-        uint32_t indexCount;
+        std::vector<SubMeshBuffer> subMeshes;
     };
 
     typedef void(*DebugLogFunc)(const char*);
@@ -44,7 +50,7 @@ public:
     void Initialize(void* windowHandle);
     void Shutdown();
 
-    void UploadMesh(const std::vector<Vertex>& vertices, const std::vector<int32_t>& indices, uint32_t meshId);
+    void UploadMesh(const std::vector<Vertex>& vertices, const std::vector<std::vector<int32_t>>& subMeshIndices, uint32_t meshId);
 
     void BeginFrame();
     void SubmitBatch(const void* batchData, int instanceCount);

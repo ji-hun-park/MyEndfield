@@ -26,9 +26,9 @@ bool SceneLoader::LoadScene(const std::string& filePath, ECSManager& ecsManager,
 
     outMeshes.resize(meshCount);
     for (uint32_t m = 0; m < meshCount; ++m) {
-        uint32_t vertexCount = 0, indexCount = 0;
+        uint32_t vertexCount = 0, subMeshCount = 0;
         file.read(reinterpret_cast<char*>(&vertexCount), sizeof(uint32_t));
-        file.read(reinterpret_cast<char*>(&indexCount), sizeof(uint32_t));
+        file.read(reinterpret_cast<char*>(&subMeshCount), sizeof(uint32_t));
 
         outMeshes[m].vertices.resize(vertexCount);
         for (uint32_t v = 0; v < vertexCount; ++v) {
@@ -43,9 +43,14 @@ bool SceneLoader::LoadScene(const std::string& filePath, ECSManager& ecsManager,
             file.read(reinterpret_cast<char*>(&vtx.uvY), sizeof(float));
         }
 
-        outMeshes[m].indices.resize(indexCount);
-        for (uint32_t i = 0; i < indexCount; ++i) {
-            file.read(reinterpret_cast<char*>(&outMeshes[m].indices[i]), sizeof(int32_t));
+        outMeshes[m].subMeshes.resize(subMeshCount);
+        for (uint32_t s = 0; s < subMeshCount; ++s) {
+            uint32_t indexCount = 0;
+            file.read(reinterpret_cast<char*>(&indexCount), sizeof(uint32_t));
+            outMeshes[m].subMeshes[s].indices.resize(indexCount);
+            for (uint32_t i = 0; i < indexCount; ++i) {
+                file.read(reinterpret_cast<char*>(&outMeshes[m].subMeshes[s].indices[i]), sizeof(int32_t));
+            }
         }
     }
 
@@ -67,8 +72,9 @@ bool SceneLoader::LoadScene(const std::string& filePath, ECSManager& ecsManager,
         file.read(reinterpret_cast<char*>(&bounds.minBounds), sizeof(float) * 3);
         file.read(reinterpret_cast<char*>(&bounds.maxBounds), sizeof(float) * 3);
         
-        int32_t meshId, matId;
+        int32_t meshId, subMeshIndex, matId;
         file.read(reinterpret_cast<char*>(&meshId), sizeof(int32_t));
+        file.read(reinterpret_cast<char*>(&subMeshIndex), sizeof(int32_t));
         file.read(reinterpret_cast<char*>(&matId), sizeof(int32_t));
 
         if (meshId < 0) continue; // Dummy data (renderer without mesh)
@@ -80,6 +86,7 @@ bool SceneLoader::LoadScene(const std::string& filePath, ECSManager& ecsManager,
         inst.sortKey.materialID = static_cast<uint16_t>(matId);
         inst.sortKey.pipelineID = static_cast<uint16_t>(meshId); // meshId를 pipelineID로 씀 (임시)
         inst.sortKey.depth = 0;
+        inst.subMeshIndex = static_cast<uint32_t>(subMeshIndex);
         outInstances.push_back(inst);
 
         Entity ent = ecsManager.CreateEntity(mask);

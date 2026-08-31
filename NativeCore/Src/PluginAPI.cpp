@@ -156,7 +156,12 @@ ENDFIELD_API void LoadNativeScene(const char* path)
                 for (const auto& v : mesh.vertices) {
                     vkVertices.push_back({v.posX, v.posY, v.posZ, v.normX, v.normY, v.normZ, v.uvX, v.uvY});
                 }
-                g_Backend->UploadMesh(vkVertices, mesh.indices, static_cast<uint32_t>(i));
+                std::vector<std::vector<int32_t>> subMeshIndices;
+                subMeshIndices.reserve(mesh.subMeshes.size());
+                for (const auto& subMesh : mesh.subMeshes) {
+                    subMeshIndices.push_back(subMesh.indices);
+                }
+                g_Backend->UploadMesh(vkVertices, subMeshIndices, static_cast<uint32_t>(i));
             }
         }
     }

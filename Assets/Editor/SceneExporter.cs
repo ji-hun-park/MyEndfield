@@ -7,6 +7,15 @@ namespace Endfield.Editor
 {
     public class SceneExporter : EditorWindow
     {
+        struct ExportInstance
+        {
+            public Matrix4x4 matrix;
+            public Bounds bounds;
+            public int meshId;
+            public int subMeshIndex;
+            public int matId;
+        }
+
         [MenuItem("Endfield/Export Scene to Native")]
         public static void ExportScene()
         {
@@ -15,6 +24,9 @@ namespace Endfield.Editor
 
             try
             {
+                int exportedMeshCount = 0;
+                int exportedInstanceCount = 0;
+
                 using (BinaryWriter writer = new BinaryWriter(File.Open(exportPath, FileMode.Create)))
                 {
                     writer.Write(new char[] { 'E', 'N', 'D', 'F' });
@@ -43,10 +55,12 @@ namespace Endfield.Editor
                         Vector3[] vertices = mesh.vertices;
                         Vector3[] normals = mesh.normals;
                         Vector2[] uvs = mesh.uv;
-                        int[] indices = mesh.triangles;
 
                         writer.Write(vertices.Length);
-                        writer.Write(indices.Length);
+
+                        // 서브메쉬 개수 기록
+                        int subMeshCount = mesh.subMeshCount;
+                        writer.Write((uint)subMeshCount);
 
                         // UV나 법선이 없을 경우 대비
                         bool hasNormals = normals.Length == vertices.Length;
@@ -83,56 +97,78 @@ namespace Endfield.Editor
                             }
                         }
 
-                        for (int i = 0; i < indices.Length; i++)
+                        // 서브메쉬별 인덱스 데이터 기록
+                        for (int i = 0; i < subMeshCount; i++)
                         {
-                            writer.Write(indices[i]);
+                            int[] indices = mesh.GetTriangles(i);
+                            writer.Write((uint)indices.Length);
+                            for (int j = 0; j < indices.Length; j++)
+                            {
+                                writer.Write(indices[j]);
+                            }
                         }
                     }
 
-                    // 3. 인스턴스 데이터 기록
-                    writer.Write(renderers.Length);
+                    // 3. 인스턴스 데이터 수집 (하나의 렌더러가 여러 마테리얼/서브메쉬를 가질 수 있으므로 인스턴스 분할)
                     Dictionary<Material, int> materialMap = new Dictionary<Material, int>();
                     int nextMaterialId = 0;
+                    List<ExportInstance> exportInstances = new List<ExportInstance>();
 
                     foreach (var renderer in renderers)
                     {
                         MeshFilter filter = renderer.GetComponent<MeshFilter>();
                         if (filter == null || filter.sharedMesh == null)
                         {
-                            // 유효하지 않은 경우 더미 데이터 기록
-                            for (int i = 0; i < 16; i++) writer.Write(0.0f); // Matrix
-                            for (int i = 0; i < 6; i++) writer.Write(0.0f);  // AABB
-                            writer.Write(-1); // MeshID
-                            writer.Write(-1); // MatID
+                            // 유효하지 않은 경우 더미 데이터 기록 (또는 생략)
                             continue;
                         }
 
                         int meshId = meshMap[filter.sharedMesh];
+                        Material[] mats = renderer.sharedMaterials;
+                        int subMeshCount = filter.sharedMesh.subMeshCount;
 
-                        Material mat = renderer.sharedMaterial;
-                        int matId = 0;
-                        if (mat != null)
+                        for (int subIdx = 0; subIdx < subMeshCount; subIdx++)
                         {
-                            if (!materialMap.TryGetValue(mat, out matId))
+                            Material mat = subIdx < mats.Length ? mats[subIdx] : renderer.sharedMaterial;
+                            int matId = 0;
+                            if (mat != null)
                             {
-                                matId = nextMaterialId++;
-                                materialMap[mat] = matId;
+                                if (!materialMap.TryGetValue(mat, out matId))
+                                {
+                                    matId = nextMaterialId++;
+                                    materialMap[mat] = matId;
+                                }
                             }
+
+                            ExportInstance inst = new ExportInstance();
+                            inst.matrix = renderer.transform.localToWorldMatrix;
+                            inst.bounds = renderer.bounds;
+                            inst.meshId = meshId;
+                            inst.subMeshIndex = subIdx;
+                            inst.matId = matId;
+                            exportInstances.Add(inst);
                         }
-
-                        Matrix4x4 matrix = renderer.transform.localToWorldMatrix;
-                        for (int i = 0; i < 16; i++) writer.Write(matrix[i]);
-
-                        Bounds bounds = renderer.bounds;
-                        writer.Write(bounds.min.x); writer.Write(bounds.min.y); writer.Write(bounds.min.z);
-                        writer.Write(bounds.max.x); writer.Write(bounds.max.y); writer.Write(bounds.max.z);
-
-                        writer.Write(meshId);
-                        writer.Write(matId);
                     }
+
+                    // 기록
+                    writer.Write((uint)exportInstances.Count);
+                    foreach (var inst in exportInstances)
+                    {
+                        for (int i = 0; i < 16; i++) writer.Write(inst.matrix[i]);
+
+                        writer.Write(inst.bounds.min.x); writer.Write(inst.bounds.min.y); writer.Write(inst.bounds.min.z);
+                        writer.Write(inst.bounds.max.x); writer.Write(inst.bounds.max.y); writer.Write(inst.bounds.max.z);
+
+                        writer.Write(inst.meshId);
+                        writer.Write(inst.subMeshIndex);
+                        writer.Write(inst.matId);
+                    }
+
+                    exportedMeshCount = uniqueMeshes.Count;
+                    exportedInstanceCount = exportInstances.Count;
                 }
 
-                Debug.Log($"[Endfield SceneExporter] Successfully exported {uniqueMeshes.Count} meshes and {renderers.Length} objects to: {exportPath}");
+                Debug.Log($"[Endfield SceneExporter] Successfully exported {exportedMeshCount} meshes and {exportedInstanceCount} objects to: {exportPath}");
                 EditorUtility.DisplayDialog("Export Complete", "Scene exported successfully for Native C++ backend.", "OK");
             }
             catch (System.Exception e)

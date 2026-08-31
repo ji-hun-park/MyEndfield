@@ -1012,15 +1012,18 @@ void VulkanBackend::SubmitBatch(const void* batchData, int instanceCount)
         }
 
         uint32_t meshId = data.sortKey.pipelineID;
+        uint32_t subMeshIdx = data.subMeshIndex;
+
         if (meshId < m_Meshes.size()) {
             MeshBuffer& mesh = m_Meshes[meshId];
-            if (mesh.vertexBuffer && mesh.indexBuffer) {
+            if (mesh.vertexBuffer && mesh.indexBuffer && subMeshIdx < mesh.subMeshes.size()) {
                 VkBuffer vertexBuffers[] = {mesh.vertexBuffer};
                 VkDeviceSize offsets[] = {0};
                 vkCmdBindVertexBuffers(m_CommandBuffer, 0, 1, vertexBuffers, offsets);
                 vkCmdBindIndexBuffer(m_CommandBuffer, mesh.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
 
-                vkCmdDrawIndexed(m_CommandBuffer, mesh.indexCount, 1, 0, 0, 0);
+                const SubMeshBuffer& subMesh = mesh.subMeshes[subMeshIdx];
+                vkCmdDrawIndexed(m_CommandBuffer, subMesh.indexCount, 1, subMesh.firstIndex, 0, 0);
             }
         }
     }
@@ -1230,15 +1233,32 @@ void VulkanBackend::CopyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceS
     vkFreeCommandBuffers(m_Device, m_CommandPool, 1, &commandBuffer);
 }
 
-void VulkanBackend::UploadMesh(const std::vector<Vertex>& vertices, const std::vector<int32_t>& indices, uint32_t meshId) {
+void VulkanBackend::UploadMesh(const std::vector<Vertex>& vertices, const std::vector<std::vector<int32_t>>& subMeshIndices, uint32_t meshId) {
     if (meshId >= m_Meshes.size()) {
         m_Meshes.resize(meshId + 1);
     }
     MeshBuffer& mesh = m_Meshes[meshId];
-    mesh.indexCount = static_cast<uint32_t>(indices.size());
+    mesh.subMeshes.clear();
+    mesh.subMeshes.reserve(subMeshIndices.size());
+
+    std::vector<int32_t> combinedIndices;
+    uint32_t totalIndices = 0;
+    for (const auto& sm : subMeshIndices) {
+        totalIndices += static_cast<uint32_t>(sm.size());
+    }
+    combinedIndices.reserve(totalIndices);
+
+    for (const auto& sm : subMeshIndices) {
+        SubMeshBuffer subMeshBuf;
+        subMeshBuf.firstIndex = static_cast<uint32_t>(combinedIndices.size());
+        subMeshBuf.indexCount = static_cast<uint32_t>(sm.size());
+        mesh.subMeshes.push_back(subMeshBuf);
+        
+        combinedIndices.insert(combinedIndices.end(), sm.begin(), sm.end());
+    }
 
     VkDeviceSize vertexBufferSize = sizeof(vertices[0]) * vertices.size();
-    VkDeviceSize indexBufferSize = sizeof(indices[0]) * indices.size();
+    VkDeviceSize indexBufferSize = sizeof(combinedIndices[0]) * combinedIndices.size();
 
     VkBuffer stagingBuffer;
     VkDeviceMemory stagingBufferMemory;
@@ -1259,7 +1279,7 @@ void VulkanBackend::UploadMesh(const std::vector<Vertex>& vertices, const std::v
     // --- Index Buffer ---
     CreateBuffer(indexBufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
     vkMapMemory(m_Device, stagingBufferMemory, 0, indexBufferSize, 0, &data);
-    memcpy(data, indices.data(), (size_t)indexBufferSize);
+    memcpy(data, combinedIndices.data(), (size_t)indexBufferSize);
     vkUnmapMemory(m_Device, stagingBufferMemory);
 
     CreateBuffer(indexBufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, mesh.indexBuffer, mesh.indexBufferMemory);
