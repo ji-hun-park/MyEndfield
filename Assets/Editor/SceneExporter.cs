@@ -169,12 +169,10 @@ namespace Endfield.Editor
                 }
 
                 Debug.Log($"[Endfield SceneExporter] Successfully exported {exportedMeshCount} meshes and {exportedInstanceCount} objects to: {exportPath}");
-                EditorUtility.DisplayDialog("Export Complete", "Scene exported successfully for Native C++ backend.", "OK");
             }
             catch (System.Exception e)
             {
                 Debug.LogError($"[Endfield SceneExporter] Failed to export scene to {exportPath}: {e.Message}\n{e.StackTrace}");
-                EditorUtility.DisplayDialog("Export Failed", $"Failed to export scene to {exportPath}.\nSee console for details.", "OK");
             }
         }
     }
