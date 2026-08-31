@@ -60,70 +60,7 @@ void VulkanBackend::Initialize(void* windowHandle)
     CreateDepthResources();
     CreateRenderPass();
     CreateFramebuffers();
-
-    // Descriptor Set Layout
-    VkDescriptorSetLayoutBinding uboLayoutBinding{};
-    uboLayoutBinding.binding = 0;
-    uboLayoutBinding.descriptorCount = 1;
-    uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    uboLayoutBinding.pImmutableSamplers = nullptr;
-    uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
-
-    VkDescriptorSetLayoutCreateInfo layoutInfo{};
-    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 1;
-    layoutInfo.pBindings = &uboLayoutBinding;
-
-    if (vkCreateDescriptorSetLayout(m_Device, &layoutInfo, nullptr, &m_DescriptorSetLayout) != VK_SUCCESS) {
-        LogToUnity("[VulkanBackend ERROR] Failed to create descriptor set layout!");
-    }
-
-    // Uniform Buffer
-    CreateBuffer(sizeof(CameraUBO), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, m_CameraUniformBuffer, m_CameraUniformBufferMemory);
-    vkMapMemory(m_Device, m_CameraUniformBufferMemory, 0, sizeof(CameraUBO), 0, &m_CameraUniformBufferMapped);
-
-    // Descriptor Pool
-    VkDescriptorPoolSize poolSize{};
-    poolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    poolSize.descriptorCount = 1;
-
-    VkDescriptorPoolCreateInfo poolInfo{};
-    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolInfo.poolSizeCount = 1;
-    poolInfo.pPoolSizes = &poolSize;
-    poolInfo.maxSets = 1;
-
-    if (vkCreateDescriptorPool(m_Device, &poolInfo, nullptr, &m_DescriptorPool) != VK_SUCCESS) {
-        LogToUnity("[VulkanBackend ERROR] Failed to create descriptor pool!");
-    }
-
-    // Descriptor Sets
-    VkDescriptorSetAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    allocInfo.descriptorPool = m_DescriptorPool;
-    allocInfo.descriptorSetCount = 1;
-    allocInfo.pSetLayouts = &m_DescriptorSetLayout;
-
-    if (vkAllocateDescriptorSets(m_Device, &allocInfo, &m_DescriptorSet0_Pass) != VK_SUCCESS) {
-        LogToUnity("[VulkanBackend ERROR] Failed to allocate descriptor sets!");
-    }
-
-    VkDescriptorBufferInfo bufferInfoDesc{};
-    bufferInfoDesc.buffer = m_CameraUniformBuffer;
-    bufferInfoDesc.offset = 0;
-    bufferInfoDesc.range = sizeof(CameraUBO);
-
-    VkWriteDescriptorSet descriptorWrite{};
-    descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    descriptorWrite.dstSet = m_DescriptorSet0_Pass;
-    descriptorWrite.dstBinding = 0;
-    descriptorWrite.dstArrayElement = 0;
-    descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    descriptorWrite.descriptorCount = 1;
-    descriptorWrite.pBufferInfo = &bufferInfoDesc;
-
-    vkUpdateDescriptorSets(m_Device, 1, &descriptorWrite, 0, nullptr);
-
+    CreateDescriptorResources();
     CreateGraphicsPipeline();
     CreateSyncObjects();
 
@@ -818,6 +755,72 @@ void VulkanBackend::CreateGraphicsPipeline()
     vkDestroyShaderModule(m_Device, vertShaderModule, nullptr);
 }
 
+void VulkanBackend::CreateDescriptorResources()
+{
+    // Descriptor Set Layout
+    VkDescriptorSetLayoutBinding uboLayoutBinding{};
+    uboLayoutBinding.binding = 0;
+    uboLayoutBinding.descriptorCount = 1;
+    uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    uboLayoutBinding.pImmutableSamplers = nullptr;
+    uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+
+    VkDescriptorSetLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layoutInfo.bindingCount = 1;
+    layoutInfo.pBindings = &uboLayoutBinding;
+
+    if (vkCreateDescriptorSetLayout(m_Device, &layoutInfo, nullptr, &m_DescriptorSetLayout) != VK_SUCCESS) {
+        LogToUnity("[VulkanBackend ERROR] Failed to create descriptor set layout!");
+    }
+
+    // Uniform Buffer
+    CreateBuffer(sizeof(CameraUBO), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, m_CameraUniformBuffer, m_CameraUniformBufferMemory);
+    vkMapMemory(m_Device, m_CameraUniformBufferMemory, 0, sizeof(CameraUBO), 0, &m_CameraUniformBufferMapped);
+
+    // Descriptor Pool
+    VkDescriptorPoolSize poolSize{};
+    poolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    poolSize.descriptorCount = 1;
+
+    VkDescriptorPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.poolSizeCount = 1;
+    poolInfo.pPoolSizes = &poolSize;
+    poolInfo.maxSets = 1;
+
+    if (vkCreateDescriptorPool(m_Device, &poolInfo, nullptr, &m_DescriptorPool) != VK_SUCCESS) {
+        LogToUnity("[VulkanBackend ERROR] Failed to create descriptor pool!");
+    }
+
+    // Descriptor Sets
+    VkDescriptorSetAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo.descriptorPool = m_DescriptorPool;
+    allocInfo.descriptorSetCount = 1;
+    allocInfo.pSetLayouts = &m_DescriptorSetLayout;
+
+    if (vkAllocateDescriptorSets(m_Device, &allocInfo, &m_DescriptorSet0_Pass) != VK_SUCCESS) {
+        LogToUnity("[VulkanBackend ERROR] Failed to allocate descriptor sets!");
+    }
+
+    VkDescriptorBufferInfo bufferInfoDesc{};
+    bufferInfoDesc.buffer = m_CameraUniformBuffer;
+    bufferInfoDesc.offset = 0;
+    bufferInfoDesc.range = sizeof(CameraUBO);
+
+    VkWriteDescriptorSet descriptorWrite{};
+    descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrite.dstSet = m_DescriptorSet0_Pass;
+    descriptorWrite.dstBinding = 0;
+    descriptorWrite.dstArrayElement = 0;
+    descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    descriptorWrite.descriptorCount = 1;
+    descriptorWrite.pBufferInfo = &bufferInfoDesc;
+
+    vkUpdateDescriptorSets(m_Device, 1, &descriptorWrite, 0, nullptr);
+}
+
 void VulkanBackend::CreateSyncObjects()
 {
     if (m_Device == VK_NULL_HANDLE) return;
@@ -844,6 +847,7 @@ void VulkanBackend::Shutdown()
     if (m_Device) {
         vkDeviceWaitIdle(m_Device);
         
+        // 13. Sync Objects
         if (m_ImageAvailableSemaphore) {
             vkDestroySemaphore(m_Device, m_ImageAvailableSemaphore, nullptr);
             m_ImageAvailableSemaphore = VK_NULL_HANDLE;
@@ -856,7 +860,61 @@ void VulkanBackend::Shutdown()
             vkDestroyFence(m_Device, m_InFlightFence, nullptr);
             m_InFlightFence = VK_NULL_HANDLE;
         }
+
+        // 12. Graphics Pipeline
+        if (m_GraphicsPipeline) {
+            vkDestroyPipeline(m_Device, m_GraphicsPipeline, nullptr);
+            m_GraphicsPipeline = VK_NULL_HANDLE;
+        }
+        if (m_PipelineLayout) {
+            vkDestroyPipelineLayout(m_Device, m_PipelineLayout, nullptr);
+            m_PipelineLayout = VK_NULL_HANDLE;
+        }
+
+        // 11. Descriptor Resources
+        if (m_DescriptorPool) {
+            vkDestroyDescriptorPool(m_Device, m_DescriptorPool, nullptr);
+            m_DescriptorPool = VK_NULL_HANDLE;
+        }
+        if (m_CameraUniformBuffer) {
+            vkDestroyBuffer(m_Device, m_CameraUniformBuffer, nullptr);
+            m_CameraUniformBuffer = VK_NULL_HANDLE;
+        }
+        if (m_CameraUniformBufferMemory) {
+            vkFreeMemory(m_Device, m_CameraUniformBufferMemory, nullptr);
+            m_CameraUniformBufferMemory = VK_NULL_HANDLE;
+        }
+        if (m_DescriptorSetLayout) {
+            vkDestroyDescriptorSetLayout(m_Device, m_DescriptorSetLayout, nullptr);
+            m_DescriptorSetLayout = VK_NULL_HANDLE;
+        }
         
+        // Runtime resources (Meshes)
+        for (auto& mesh : m_Meshes) {
+            if (mesh.vertexBuffer) {
+                vkDestroyBuffer(m_Device, mesh.vertexBuffer, nullptr);
+                vkFreeMemory(m_Device, mesh.vertexBufferMemory, nullptr);
+            }
+            if (mesh.indexBuffer) {
+                vkDestroyBuffer(m_Device, mesh.indexBuffer, nullptr);
+                vkFreeMemory(m_Device, mesh.indexBufferMemory, nullptr);
+            }
+        }
+        m_Meshes.clear();
+
+        // 10. Framebuffers
+        for (auto framebuffer : m_SwapchainFramebuffers) {
+            vkDestroyFramebuffer(m_Device, framebuffer, nullptr);
+        }
+        m_SwapchainFramebuffers.clear();
+
+        // 9. Render Pass
+        if (m_RenderPass) {
+            vkDestroyRenderPass(m_Device, m_RenderPass, nullptr);
+            m_RenderPass = VK_NULL_HANDLE;
+        }
+
+        // 8. Depth Resources
         if (m_DepthImageView) {
             vkDestroyImageView(m_Device, m_DepthImageView, nullptr);
             m_DepthImageView = VK_NULL_HANDLE;
@@ -870,38 +928,7 @@ void VulkanBackend::Shutdown()
             m_DepthImageMemory = VK_NULL_HANDLE;
         }
 
-        for (auto& mesh : m_Meshes) {
-            if (mesh.vertexBuffer) {
-                vkDestroyBuffer(m_Device, mesh.vertexBuffer, nullptr);
-                vkFreeMemory(m_Device, mesh.vertexBufferMemory, nullptr);
-            }
-            if (mesh.indexBuffer) {
-                vkDestroyBuffer(m_Device, mesh.indexBuffer, nullptr);
-                vkFreeMemory(m_Device, mesh.indexBufferMemory, nullptr);
-            }
-        }
-        m_Meshes.clear();
-
-        for (auto framebuffer : m_SwapchainFramebuffers) {
-            vkDestroyFramebuffer(m_Device, framebuffer, nullptr);
-        }
-        m_SwapchainFramebuffers.clear();
-
-        if (m_GraphicsPipeline) {
-            vkDestroyPipeline(m_Device, m_GraphicsPipeline, nullptr);
-            m_GraphicsPipeline = VK_NULL_HANDLE;
-        }
-
-        if (m_PipelineLayout) {
-            vkDestroyPipelineLayout(m_Device, m_PipelineLayout, nullptr);
-            m_PipelineLayout = VK_NULL_HANDLE;
-        }
-
-        if (m_RenderPass) {
-            vkDestroyRenderPass(m_Device, m_RenderPass, nullptr);
-            m_RenderPass = VK_NULL_HANDLE;
-        }
-
+        // 7. Swapchain
         for (auto imageView : m_SwapchainImageViews) {
             vkDestroyImageView(m_Device, imageView, nullptr);
         }
@@ -912,14 +939,26 @@ void VulkanBackend::Shutdown()
             m_Swapchain = VK_NULL_HANDLE;
         }
 
+        // 6. Command Objects
         if (m_CommandPool) {
             vkDestroyCommandPool(m_Device, m_CommandPool, nullptr);
             m_CommandPool = VK_NULL_HANDLE;
         }
+        
+        // 5. Logical Device
         vkDestroyDevice(m_Device, nullptr);
         m_Device = VK_NULL_HANDLE;
     }
 
+    // 4. Physical Device (No explicit destruction needed)
+
+    // 3. Surface
+    if (m_Surface) {
+        vkDestroySurfaceKHR(m_Instance, m_Surface, nullptr);
+        m_Surface = VK_NULL_HANDLE;
+    }
+
+    // 2. Debug Messenger
     if (m_DebugMessenger) {
         auto func = (PFN_vkDestroyDebugUtilsMessengerEXT) vkGetInstanceProcAddr(m_Instance, "vkDestroyDebugUtilsMessengerEXT");
         if (func != nullptr) {
@@ -928,11 +967,7 @@ void VulkanBackend::Shutdown()
         m_DebugMessenger = VK_NULL_HANDLE;
     }
 
-    if (m_Surface) {
-        vkDestroySurfaceKHR(m_Instance, m_Surface, nullptr);
-        m_Surface = VK_NULL_HANDLE;
-    }
-
+    // 1. Instance
     if (m_Instance) {
         vkDestroyInstance(m_Instance, nullptr);
         m_Instance = VK_NULL_HANDLE;
@@ -1091,6 +1126,18 @@ void VulkanBackend::SubmitBatch(const void* batchData, int instanceCount)
 
     const InstanceData* instances = static_cast<const InstanceData*>(batchData);
 
+    // --- [0] 64비트 정렬 키 기반의 오브젝트 정렬 (Sorting) ---
+    // Endfield 문서: "정렬 비교는 16바이트짜리 값에 대한 분기 비교이며, 표준 정렬(std::sort)을 그대로 사용합니다."
+    // 렌더 루프 도중 메모리 재할당 오버헤드를 막기 위해, 멤버 변수(m_SortedInstances)를 재사용합니다.
+    m_SortedInstances.assign(instances, instances + instanceCount);
+    
+    std::sort(m_SortedInstances.begin(), m_SortedInstances.end(), [](const InstanceData& a, const InstanceData& b) {
+        return a.sortKey < b.sortKey; // SortKey.h에 정의된 64비트 uint64_t(value) 기반 operator< 비교
+    });
+    
+    // 이후 로직은 정렬된 배열을 기반으로 진행합니다.
+    const InstanceData* sortedInstances = m_SortedInstances.data();
+
     // Endfield Architecture: Descriptor sets are separated by frequency of update
     // Set 0: Per Pass (Lighting, Camera, Shadows)
     // Set 1: Per Material (Textures, Constants)
@@ -1130,9 +1177,9 @@ void VulkanBackend::SubmitBatch(const void* batchData, int instanceCount)
         int startIdx = t * chunkSize;
         int endIdx = (t == numThreads - 1) ? instanceCount : startIdx + chunkSize;
 
-        workers.emplace_back([startIdx, endIdx, instances, &intermediateCmds, PLACEHOLDER_BINDING]() {
+        workers.emplace_back([startIdx, endIdx, sortedInstances, &intermediateCmds, PLACEHOLDER_BINDING]() {
             for (int i = startIdx; i < endIdx; ++i) {
-                const InstanceData& data = instances[i];
+                const InstanceData& data = sortedInstances[i];
                 IntermediateDrawCmd cmd;
                 
                 // 앞뒤 문맥(Context)을 모르는 워커 스레드의 행동: 무조건 플레이스홀더 기록

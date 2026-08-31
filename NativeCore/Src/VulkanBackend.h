@@ -92,6 +92,7 @@ private:
     void CreateGraphicsPipeline();
     
     VkShaderModule CreateShaderModule(const std::vector<char>& code);
+    void CreateDescriptorResources();
     void CreateSyncObjects();
 
     // Core Vulkan Handles
@@ -141,7 +142,7 @@ private:
     VkDescriptorSet m_DescriptorSet2_Object = VK_NULL_HANDLE;
     std::vector<VkDescriptorSet> m_MaterialSets;
     uint32_t m_LastBoundMaterialSet = 0xFFFFFFFF;
-
+    std::vector<InstanceData> m_SortedInstances;
 
     RenderGraph m_RenderGraph;
 
