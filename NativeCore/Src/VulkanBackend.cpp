@@ -1158,6 +1158,7 @@ void VulkanBackend::SubmitBatch(const void* batchData, int instanceCount)
     // --- [2] 최종 정리(Finalize) 단계 ---
     // 정렬(Sort)이 완료된 상태에서 순차적으로 커맨드를 순회하며 중복 바인딩을 제거(Skip)합니다.
 
+    int instanceIndex = 0;
     for (const auto& cmd : intermediateCmds)
     {
         // 플레이스홀더 확인 및 지연 평가(Lazy Evaluation)
@@ -1179,15 +1180,24 @@ void VulkanBackend::SubmitBatch(const void* batchData, int instanceCount)
             }
         }
         
-        // Push Constants 업데이트 (Set 2 Dynamic Offset을 대신하여 현재는 Push Constant 사용 중)
-        if (m_PipelineLayout != VK_NULL_HANDLE) {
-            vkCmdPushConstants(
+        // Set 2: 드로우마다 바뀌는 오브젝트 데이터 (Dynamic Offset 적용)
+        // Endfield 문서: "오브젝트별로 별도 셋을 만들지 않고, 전체를 위한 큰 버퍼 하나를 
+        // 하나의 셋으로 만들어두고, 각 드로우는 그 버퍼 안에서 자신의 슬라이스로 향하는 다이나믹 오프셋만 이동시킵니다."
+        if (m_PipelineLayout != VK_NULL_HANDLE && m_DescriptorSet2_Object != VK_NULL_HANDLE) {
+            // 참고: 실제 Vulkan 구현에서는 디바이스의 minUniformBufferOffsetAlignment 값에 맞춰 
+            // 오프셋 보정(Alignment)이 필요하지만, 여기서는 구조적 이해를 위해 기본 크기 단위 오프셋을 보여줍니다.
+            uint32_t dynamicOffset = static_cast<uint32_t>(instanceIndex * sizeof(InstanceData));
+            
+            vkCmdBindDescriptorSets(
                 m_CommandBuffer, 
+                VK_PIPELINE_BIND_POINT_GRAPHICS, 
                 m_PipelineLayout, 
-                VK_SHADER_STAGE_VERTEX_BIT, 
-                0, 
-                sizeof(InstanceData), 
-                &cmd.data);
+                2, // Set 2: Object Data
+                1, 
+                &m_DescriptorSet2_Object, 
+                1, 
+                &dynamicOffset
+            );
         }
 
         if (cmd.meshId < m_Meshes.size()) {
@@ -1202,6 +1212,8 @@ void VulkanBackend::SubmitBatch(const void* batchData, int instanceCount)
                 vkCmdDrawIndexed(m_CommandBuffer, subMesh.indexCount, 1, subMesh.firstIndex, 0, 0);
             }
         }
+        
+        instanceIndex++;
     }
 }
 
