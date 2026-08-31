@@ -23,11 +23,27 @@ public:
         SortKey sortKey;
     };
 
+    struct Vertex {
+        float posX, posY, posZ;
+        float normX, normY, normZ;
+        float uvX, uvY;
+    };
+
+    struct MeshBuffer {
+        VkBuffer vertexBuffer;
+        VkDeviceMemory vertexBufferMemory;
+        VkBuffer indexBuffer;
+        VkDeviceMemory indexBufferMemory;
+        uint32_t indexCount;
+    };
+
     typedef void(*DebugLogFunc)(const char*);
     static void SetDebugCallback(DebugLogFunc callback);
 
     void Initialize(void* windowHandle);
     void Shutdown();
+
+    void UploadMesh(const std::vector<Vertex>& vertices, const std::vector<int32_t>& indices, uint32_t meshId);
 
     void BeginFrame();
     void SubmitBatch(const void* batchData, int instanceCount);
@@ -108,6 +124,9 @@ private:
 
     RenderGraph m_RenderGraph;
 
+    // Mesh Buffers
+    std::vector<MeshBuffer> m_Meshes;
+
     // Depth buffer resources
     VkImage m_DepthImage = VK_NULL_HANDLE;
     VkDeviceMemory m_DepthImageMemory = VK_NULL_HANDLE;
@@ -119,6 +138,10 @@ private:
     VkFormat FindDepthFormat();
     void CreateDepthResources();
     uint32_t FindMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
+    
+    // Buffer helper methods
+    void CreateBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkBuffer& buffer, VkDeviceMemory& bufferMemory);
+    void CopyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size);
 };
 
 } // namespace Endfield

@@ -144,9 +144,21 @@ ENDFIELD_API void UpdateCameraState(float* viewMatrix, float* projMatrix)
 
 ENDFIELD_API void LoadNativeScene(const char* path)
 {
-    if (g_ECS && path != nullptr) {
+    if (g_ECS && path != nullptr && g_Backend) {
         std::string filePath(path);
-        Endfield::SceneLoader::LoadScene(filePath, *g_ECS, g_SceneAABBs, g_SceneInstances);
+        std::vector<Endfield::SceneLoader::MeshData> meshes;
+        if (Endfield::SceneLoader::LoadScene(filePath, *g_ECS, g_SceneAABBs, g_SceneInstances, meshes)) {
+            for (size_t i = 0; i < meshes.size(); ++i) {
+                // Cast SceneLoader::Vertex to VulkanBackend::Vertex
+                const auto& mesh = meshes[i];
+                std::vector<Endfield::VulkanBackend::Vertex> vkVertices;
+                vkVertices.reserve(mesh.vertices.size());
+                for (const auto& v : mesh.vertices) {
+                    vkVertices.push_back({v.posX, v.posY, v.posZ, v.normX, v.normY, v.normZ, v.uvX, v.uvY});
+                }
+                g_Backend->UploadMesh(vkVertices, mesh.indices, static_cast<uint32_t>(i));
+            }
+        }
     }
 }
 

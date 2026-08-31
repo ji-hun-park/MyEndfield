@@ -644,7 +644,34 @@ void VulkanBackend::CreateGraphicsPipeline()
         CreateShaderStageInfo(VK_SHADER_STAGE_FRAGMENT_BIT, fragShaderModule)
     };
 
-    VkPipelineVertexInputStateCreateInfo vertexInputInfo = CreateVertexInputStateInfo();
+    VkVertexInputBindingDescription bindingDescription{};
+    bindingDescription.binding = 0;
+    bindingDescription.stride = sizeof(Vertex);
+    bindingDescription.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+    std::vector<VkVertexInputAttributeDescription> attributeDescriptions(3);
+    attributeDescriptions[0].binding = 0;
+    attributeDescriptions[0].location = 0;
+    attributeDescriptions[0].format = VK_FORMAT_R32G32B32_SFLOAT;
+    attributeDescriptions[0].offset = offsetof(Vertex, posX);
+
+    attributeDescriptions[1].binding = 0;
+    attributeDescriptions[1].location = 1;
+    attributeDescriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT;
+    attributeDescriptions[1].offset = offsetof(Vertex, normX);
+
+    attributeDescriptions[2].binding = 0;
+    attributeDescriptions[2].location = 2;
+    attributeDescriptions[2].format = VK_FORMAT_R32G32_SFLOAT;
+    attributeDescriptions[2].offset = offsetof(Vertex, uvX);
+
+    VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
+    vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vertexInputInfo.vertexBindingDescriptionCount = 1;
+    vertexInputInfo.pVertexBindingDescriptions = &bindingDescription;
+    vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size());
+    vertexInputInfo.pVertexAttributeDescriptions = attributeDescriptions.data();
+
     VkPipelineInputAssemblyStateCreateInfo inputAssembly = CreateInputAssemblyStateInfo();
     
     VkPipelineViewportStateCreateInfo viewportState{};
@@ -776,6 +803,18 @@ void VulkanBackend::Shutdown()
             vkFreeMemory(m_Device, m_DepthImageMemory, nullptr);
             m_DepthImageMemory = VK_NULL_HANDLE;
         }
+
+        for (auto& mesh : m_Meshes) {
+            if (mesh.vertexBuffer) {
+                vkDestroyBuffer(m_Device, mesh.vertexBuffer, nullptr);
+                vkFreeMemory(m_Device, mesh.vertexBufferMemory, nullptr);
+            }
+            if (mesh.indexBuffer) {
+                vkDestroyBuffer(m_Device, mesh.indexBuffer, nullptr);
+                vkFreeMemory(m_Device, mesh.indexBufferMemory, nullptr);
+            }
+        }
+        m_Meshes.clear();
 
         for (auto framebuffer : m_SwapchainFramebuffers) {
             vkDestroyFramebuffer(m_Device, framebuffer, nullptr);
@@ -972,8 +1011,18 @@ void VulkanBackend::SubmitBatch(const void* batchData, int instanceCount)
                 &data);
         }
 
-        // Execute Draw Call (Vertex Shader의 하드코딩된 Cube 36개 정점 사용)
-        vkCmdDraw(m_CommandBuffer, 36, 1, 0, 0);
+        uint32_t meshId = data.sortKey.pipelineID;
+        if (meshId < m_Meshes.size()) {
+            MeshBuffer& mesh = m_Meshes[meshId];
+            if (mesh.vertexBuffer && mesh.indexBuffer) {
+                VkBuffer vertexBuffers[] = {mesh.vertexBuffer};
+                VkDeviceSize offsets[] = {0};
+                vkCmdBindVertexBuffers(m_CommandBuffer, 0, 1, vertexBuffers, offsets);
+                vkCmdBindIndexBuffer(m_CommandBuffer, mesh.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+
+                vkCmdDrawIndexed(m_CommandBuffer, mesh.indexCount, 1, 0, 0, 0);
+            }
+        }
     }
 }
 
@@ -1115,6 +1164,109 @@ void VulkanBackend::CreateDepthResources() {
     if (vkCreateImageView(m_Device, &viewInfo, nullptr, &m_DepthImageView) != VK_SUCCESS) {
         LogToUnity("[VulkanBackend ERROR] Failed to create depth image view!");
     }
+}
+
+} // namespace Endfield
+
+// ----- Buffer Helpers & Mesh Uploading -----
+namespace Endfield {
+
+void VulkanBackend::CreateBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkBuffer& buffer, VkDeviceMemory& bufferMemory) {
+    VkBufferCreateInfo bufferInfo{};
+    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufferInfo.size = size;
+    bufferInfo.usage = usage;
+    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    if (vkCreateBuffer(m_Device, &bufferInfo, nullptr, &buffer) != VK_SUCCESS) {
+        LogToUnity("[VulkanBackend ERROR] Failed to create buffer!");
+    }
+
+    VkMemoryRequirements memRequirements;
+    vkGetBufferMemoryRequirements(m_Device, buffer, &memRequirements);
+
+    VkMemoryAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memRequirements.size;
+    allocInfo.memoryTypeIndex = FindMemoryType(memRequirements.memoryTypeBits, properties);
+
+    if (vkAllocateMemory(m_Device, &allocInfo, nullptr, &bufferMemory) != VK_SUCCESS) {
+        LogToUnity("[VulkanBackend ERROR] Failed to allocate buffer memory!");
+    }
+
+    vkBindBufferMemory(m_Device, buffer, bufferMemory, 0);
+}
+
+void VulkanBackend::CopyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size) {
+    VkCommandBufferAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    allocInfo.commandPool = m_CommandPool;
+    allocInfo.commandBufferCount = 1;
+
+    VkCommandBuffer commandBuffer;
+    vkAllocateCommandBuffers(m_Device, &allocInfo, &commandBuffer);
+
+    VkCommandBufferBeginInfo beginInfo{};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+    vkBeginCommandBuffer(commandBuffer, &beginInfo);
+
+    VkBufferCopy copyRegion{};
+    copyRegion.size = size;
+    vkCmdCopyBuffer(commandBuffer, srcBuffer, dstBuffer, 1, &copyRegion);
+
+    vkEndCommandBuffer(commandBuffer);
+
+    VkSubmitInfo submitInfo{};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &commandBuffer;
+
+    vkQueueSubmit(m_GraphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
+    vkQueueWaitIdle(m_GraphicsQueue);
+
+    vkFreeCommandBuffers(m_Device, m_CommandPool, 1, &commandBuffer);
+}
+
+void VulkanBackend::UploadMesh(const std::vector<Vertex>& vertices, const std::vector<int32_t>& indices, uint32_t meshId) {
+    if (meshId >= m_Meshes.size()) {
+        m_Meshes.resize(meshId + 1);
+    }
+    MeshBuffer& mesh = m_Meshes[meshId];
+    mesh.indexCount = static_cast<uint32_t>(indices.size());
+
+    VkDeviceSize vertexBufferSize = sizeof(vertices[0]) * vertices.size();
+    VkDeviceSize indexBufferSize = sizeof(indices[0]) * indices.size();
+
+    VkBuffer stagingBuffer;
+    VkDeviceMemory stagingBufferMemory;
+
+    // --- Vertex Buffer ---
+    CreateBuffer(vertexBufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
+    void* data;
+    vkMapMemory(m_Device, stagingBufferMemory, 0, vertexBufferSize, 0, &data);
+    memcpy(data, vertices.data(), (size_t)vertexBufferSize);
+    vkUnmapMemory(m_Device, stagingBufferMemory);
+
+    CreateBuffer(vertexBufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, mesh.vertexBuffer, mesh.vertexBufferMemory);
+    CopyBuffer(stagingBuffer, mesh.vertexBuffer, vertexBufferSize);
+
+    vkDestroyBuffer(m_Device, stagingBuffer, nullptr);
+    vkFreeMemory(m_Device, stagingBufferMemory, nullptr);
+
+    // --- Index Buffer ---
+    CreateBuffer(indexBufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
+    vkMapMemory(m_Device, stagingBufferMemory, 0, indexBufferSize, 0, &data);
+    memcpy(data, indices.data(), (size_t)indexBufferSize);
+    vkUnmapMemory(m_Device, stagingBufferMemory);
+
+    CreateBuffer(indexBufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, mesh.indexBuffer, mesh.indexBufferMemory);
+    CopyBuffer(stagingBuffer, mesh.indexBuffer, indexBufferSize);
+
+    vkDestroyBuffer(m_Device, stagingBuffer, nullptr);
+    vkFreeMemory(m_Device, stagingBufferMemory, nullptr);
 }
 
 } // namespace Endfield

@@ -10,8 +10,19 @@ namespace Endfield {
 
 class SceneLoader {
 public:
+    struct Vertex {
+        float posX, posY, posZ;
+        float normX, normY, normZ;
+        float uvX, uvY;
+    };
+
+    struct MeshData {
+        std::vector<Vertex> vertices;
+        std::vector<int32_t> indices;
+    };
+
     // 바이너리 파일 경로를 받아서 ECS에 엔티티들을 등록합니다.
-    static bool LoadScene(const std::string& filePath, ECSManager& ecsManager, std::vector<AABB>& outAABBs, std::vector<VulkanBackend::InstanceData>& outInstances);
+    static bool LoadScene(const std::string& filePath, ECSManager& ecsManager, std::vector<AABB>& outAABBs, std::vector<VulkanBackend::InstanceData>& outInstances, std::vector<MeshData>& outMeshes);
 };
 
 } // namespace Endfield

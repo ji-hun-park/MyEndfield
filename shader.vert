@@ -2,24 +2,18 @@
 layout(push_constant) uniform PushConstants {
     mat4 mvpMatrix;
 } pushConstants;
-vec3 positions[36] = vec3[](
-    vec3(-0.5, -0.5,  0.5), vec3( 0.5, -0.5,  0.5), vec3( 0.5,  0.5,  0.5),
-    vec3( 0.5,  0.5,  0.5), vec3(-0.5,  0.5,  0.5), vec3(-0.5, -0.5,  0.5),
-    vec3( 0.5, -0.5, -0.5), vec3(-0.5, -0.5, -0.5), vec3(-0.5,  0.5, -0.5),
-    vec3(-0.5,  0.5, -0.5), vec3( 0.5,  0.5, -0.5), vec3( 0.5, -0.5, -0.5),
-    vec3(-0.5, -0.5, -0.5), vec3(-0.5, -0.5,  0.5), vec3(-0.5,  0.5,  0.5),
-    vec3(-0.5,  0.5,  0.5), vec3(-0.5,  0.5, -0.5), vec3(-0.5, -0.5, -0.5),
-    vec3( 0.5, -0.5,  0.5), vec3( 0.5, -0.5, -0.5), vec3( 0.5,  0.5, -0.5),
-    vec3( 0.5,  0.5, -0.5), vec3( 0.5,  0.5,  0.5), vec3( 0.5, -0.5,  0.5),
-    vec3(-0.5,  0.5,  0.5), vec3( 0.5,  0.5,  0.5), vec3( 0.5,  0.5, -0.5),
-    vec3( 0.5,  0.5, -0.5), vec3(-0.5,  0.5, -0.5), vec3(-0.5,  0.5,  0.5),
-    vec3(-0.5, -0.5, -0.5), vec3( 0.5, -0.5, -0.5), vec3( 0.5, -0.5,  0.5),
-    vec3( 0.5, -0.5,  0.5), vec3(-0.5, -0.5,  0.5), vec3(-0.5, -0.5, -0.5)
-);
-layout(location = 0) out vec3 fragColor;
+
+layout(location = 0) in vec3 inPosition;
+layout(location = 1) in vec3 inNormal;
+layout(location = 2) in vec2 inUV;
+
+layout(location = 0) out vec3 fragNormal;
+layout(location = 1) out vec2 fragUV;
+
 void main() {
-    gl_Position = pushConstants.mvpMatrix * vec4(positions[gl_VertexIndex % 36], 1.0);
-    // Invert Y for Vulkan
+    gl_Position = pushConstants.mvpMatrix * vec4(inPosition, 1.0);
+    // Invert Y for Vulkan (since Unity uses OpenGL style Y-up but Vulkan is Y-down)
     gl_Position.y = -gl_Position.y; 
-    fragColor = positions[gl_VertexIndex % 36] + vec3(0.5);
+    fragNormal = inNormal;
+    fragUV = inUV;
 }
