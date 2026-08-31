@@ -17,7 +17,7 @@ void VulkanBackend::SetDebugCallback(DebugLogFunc callback) {
     g_DebugCallback = callback;
 }
 
-static void LogToUnity(const std::string& message) {
+void VulkanBackend::LogToUnity(const std::string& message) {
     if (g_DebugCallback) {
         g_DebugCallback(message.c_str());
     } else {
@@ -35,7 +35,7 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(
     if (messageSeverity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) prefix = "[Vulkan ERROR] ";
     else if (messageSeverity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) prefix = "[Vulkan WARNING] ";
 
-    LogToUnity(prefix + pCallbackData->pMessage);
+    VulkanBackend::LogToUnity(prefix + pCallbackData->pMessage);
     return VK_FALSE;
 }
 
@@ -561,7 +561,7 @@ void VulkanBackend::CreateFramebuffers()
 static std::vector<char> ReadFile(const std::string& filename) {
     std::ifstream file(filename, std::ios::ate | std::ios::binary);
     if (!file.is_open()) {
-        LogToUnity("[VulkanBackend ERROR] Failed to open file: " + filename);
+        VulkanBackend::LogToUnity("[VulkanBackend ERROR] Failed to open file: " + filename);
         return {};
     }
     size_t fileSize = (size_t) file.tellg();

@@ -7,7 +7,7 @@ namespace Endfield {
 bool SceneLoader::LoadScene(const std::string& filePath, ECSManager& ecsManager, std::vector<AABB>& outAABBs, std::vector<VulkanBackend::InstanceData>& outInstances, std::vector<MeshData>& outMeshes) {
     std::ifstream file(filePath, std::ios::binary);
     if (!file.is_open()) {
-        std::cerr << "[SceneLoader] Failed to open scene file: " << filePath << "\n";
+        VulkanBackend::LogToUnity("[SceneLoader ERROR] Failed to open scene file: " + filePath);
         return false;
     }
 
@@ -15,14 +15,14 @@ bool SceneLoader::LoadScene(const std::string& filePath, ECSManager& ecsManager,
     char magic[4];
     file.read(magic, 4);
     if (magic[0] != 'E' || magic[1] != 'N' || magic[2] != 'D' || magic[3] != 'F') {
-        std::cerr << "[SceneLoader] Invalid scene file format.\n";
+        VulkanBackend::LogToUnity("[SceneLoader ERROR] Invalid scene file format.");
         return false;
     }
 
     // 2. 메쉬 데이터 읽기
     uint32_t meshCount = 0;
     file.read(reinterpret_cast<char*>(&meshCount), sizeof(uint32_t));
-    std::cout << "[SceneLoader] Loading " << meshCount << " meshes...\n";
+    VulkanBackend::LogToUnity("[SceneLoader] Loading " + std::to_string(meshCount) + " meshes...");
 
     outMeshes.resize(meshCount);
     for (uint32_t m = 0; m < meshCount; ++m) {
@@ -52,7 +52,7 @@ bool SceneLoader::LoadScene(const std::string& filePath, ECSManager& ecsManager,
     // 3. 오브젝트(인스턴스) 개수 읽기
     uint32_t objectCount = 0;
     file.read(reinterpret_cast<char*>(&objectCount), sizeof(uint32_t));
-    std::cout << "[SceneLoader] Loading " << objectCount << " objects from scene...\n";
+    VulkanBackend::LogToUnity("[SceneLoader] Loading " + std::to_string(objectCount) + " objects from scene...");
 
     outAABBs.reserve(objectCount);
     outInstances.reserve(objectCount);
@@ -85,7 +85,7 @@ bool SceneLoader::LoadScene(const std::string& filePath, ECSManager& ecsManager,
         Entity ent = ecsManager.CreateEntity(mask);
     }
 
-    std::cout << "[SceneLoader] Scene loaded successfully.\n";
+    VulkanBackend::LogToUnity("[SceneLoader] Scene loaded successfully.");
     return true;
 }
 

@@ -1,4 +1,5 @@
 #include "ECS.h"
+#include "VulkanBackend.h"
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
@@ -104,7 +105,7 @@ Archetype* ECSManager::GetOrCreateArchetype(const ComponentMask& mask) {
     Archetype* ptr = newArch.get();
     m_Archetypes.push_back(std::move(newArch));
     
-    std::cout << "[ECS] Created new Archetype (Mask Low: " << mask.low << ", High: " << mask.high << ")\n";
+    VulkanBackend::LogToUnity("[ECS] Created new Archetype (Mask Low: " + std::to_string(mask.low) + ", High: " + std::to_string(mask.high) + ")");
     return ptr;
 }
 
@@ -123,7 +124,7 @@ Entity ECSManager::CreateEntity(const ComponentMask& mask) {
     if (!targetChunk) {
         arch->chunks.push_back(std::make_unique<Chunk>(mask));
         targetChunk = arch->chunks.back().get();
-        std::cout << "[ECS] Allocated new Chunk for Archetype.\n";
+        VulkanBackend::LogToUnity("[ECS] Allocated new Chunk for Archetype.");
     }
 
     uint32_t index = targetChunk->AddEntity(ent);

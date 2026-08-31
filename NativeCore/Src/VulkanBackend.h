@@ -39,6 +39,7 @@ public:
 
     typedef void(*DebugLogFunc)(const char*);
     static void SetDebugCallback(DebugLogFunc callback);
+    static void LogToUnity(const std::string& message);
 
     void Initialize(void* windowHandle);
     void Shutdown();

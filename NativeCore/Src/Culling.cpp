@@ -1,4 +1,5 @@
 #include "Culling.h"
+#include "VulkanBackend.h"
 #include <cmath>
 #include <thread>
 #include <future>
@@ -79,7 +80,7 @@ void CullingSystem::Initialize(uint32_t numWorkers) {
     // 저해상도 소프트웨어 뎁스 버퍼 할당 (예: 256x128 픽셀용)
     m_DepthBuffer.resize(256 * 128, 0.0f);
     
-    std::cout << "[CullingSystem] Initialized with " << m_NumWorkers << " parallel workers.\n";
+    VulkanBackend::LogToUnity("[CullingSystem] Initialized with " + std::to_string(m_NumWorkers) + " parallel workers.");
 }
 
 void CullingSystem::Shutdown() {
