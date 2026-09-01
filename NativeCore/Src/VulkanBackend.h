@@ -147,6 +147,9 @@ private:
     VkDeviceMemory m_CameraUniformBufferMemory = VK_NULL_HANDLE;
     void* m_CameraUniformBufferMapped = nullptr;
 
+    float m_ViewMatrix[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
+    float m_ProjMatrix[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
+
     struct IntermediateDrawCmd {
         uint32_t descriptorSetPlaceholder; // 0x7F7F7F7F (더미 마커)
         uint32_t materialID;

@@ -1094,6 +1094,9 @@ void VulkanBackend::SetupRenderGraph()
 
 void VulkanBackend::UpdateCamera(float* viewMatrix, float* projMatrix)
 {
+    memcpy(m_ViewMatrix, viewMatrix, sizeof(float) * 16);
+    memcpy(m_ProjMatrix, projMatrix, sizeof(float) * 16);
+    
     if (m_CameraUniformBufferMapped) {
         CameraUBO ubo{};
         memcpy(ubo.view, viewMatrix, sizeof(float) * 16);
@@ -1207,15 +1210,27 @@ void VulkanBackend::ExecuteOpaqueDraws(VkCommandBuffer cmdBuffer)
     // --- [-1] 소프트웨어 오클루전 컬링 (Software Occlusion Culling) ---
     // 컬링을 가장 먼저 수행하여 화면에 보이지 않는 오브젝트를 제거합니다.
     
-    // 임시로 오클루더 메쉬와 뷰프로젝션 행렬을 넘겨주는 형태 (실제 데이터는 외부에서 주입 필요)
+    // Compute VP Matrix
+    float vp[16];
+    for (int c = 0; c < 4; ++c) {
+        for (int r = 0; r < 4; ++r) {
+            vp[c * 4 + r] = 0;
+            for (int k = 0; k < 4; ++k) {
+                vp[c * 4 + r] += m_ProjMatrix[k * 4 + r] * m_ViewMatrix[c * 4 + k];
+            }
+        }
+    }
+
     std::vector<OccluderMesh> dummyOccluders;
-    m_CullingSystem.BatchOccluders(dummyOccluders, instances[0].mvpMatrix, m_SwapchainExtent.width, m_SwapchainExtent.height);
+    m_CullingSystem.BatchOccluders(dummyOccluders, vp, m_SwapchainExtent.width, m_SwapchainExtent.height);
     m_CullingSystem.RasterizeTilesParallel(m_SwapchainExtent.width, m_SwapchainExtent.height);
      
     std::vector<bool> visibilityResults;
     AABB defaultLocalBounds = { {-1, -1, -1}, {1, 1, 1} };
+    
+    // Note: instances[0].mvpMatrix is actually the MODEL matrix because of push constant layout
     m_CullingSystem.PerformOcclusionTestParallel(
-        instances[0].mvpMatrix, instanceCount, sizeof(InstanceData), 
+        vp, reinterpret_cast<const float*>(instances), instanceCount, sizeof(InstanceData), 
         defaultLocalBounds, m_SwapchainExtent.width, m_SwapchainExtent.height, visibilityResults
     );
 

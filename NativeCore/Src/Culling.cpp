@@ -320,7 +320,7 @@ void CullingSystem::RasterizeTilesParallel(float screenWidth, float screenHeight
     VulkanBackend::LogToUnity("[CullingSystem] Phase 2: RasterizeTilesParallel - 8 Tiles Rasterized (Lock-Free) into Depth Buffer.");
 }
 
-void CullingSystem::PerformOcclusionTestParallel(const float* mvpMatrices, int instanceCount, size_t stride, const AABB& localBounds, float screenWidth, float screenHeight, std::vector<bool>& outVisibility) {
+void CullingSystem::PerformOcclusionTestParallel(const float* vpMatrix, const float* modelMatrices, int instanceCount, size_t stride, const AABB& localBounds, float screenWidth, float screenHeight, std::vector<bool>& outVisibility) {
     if (instanceCount <= 0) return;
     outVisibility.resize(instanceCount, false);
 
@@ -346,13 +346,22 @@ void CullingSystem::PerformOcclusionTestParallel(const float* mvpMatrices, int i
         { localBounds.maxBounds[0], localBounds.maxBounds[1], localBounds.maxBounds[2] }
     };
 
-    auto occlusionTask = [&](int workerID) {
-        int chunk = instanceCount / NUM_WORKERS;
-        int start = workerID * chunk;
-        int end = (workerID == NUM_WORKERS - 1) ? instanceCount : start + chunk;
+    auto occlusionTask = [&](int workerIndex) {
+        int start = (instanceCount * workerIndex) / NUM_WORKERS;
+        int end = (instanceCount * (workerIndex + 1)) / NUM_WORKERS;
 
         for (int i = start; i < end; ++i) {
-            const float* mvp = reinterpret_cast<const float*>(reinterpret_cast<const uint8_t*>(mvpMatrices) + i * stride);
+            const float* model = reinterpret_cast<const float*>(reinterpret_cast<const uint8_t*>(modelMatrices) + i * stride);
+            
+            float mvp[16];
+            for (int c = 0; c < 4; ++c) {
+                for (int r = 0; r < 4; ++r) {
+                    mvp[c * 4 + r] = 0;
+                    for (int k = 0; k < 4; ++k) {
+                        mvp[c * 4 + r] += vpMatrix[k * 4 + r] * model[c * 4 + k];
+                    }
+                }
+            }
             
             float minX = 1e9f, maxX = -1e9f;
             float minY = 1e9f, maxY = -1e9f;

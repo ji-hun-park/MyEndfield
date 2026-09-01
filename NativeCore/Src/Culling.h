@@ -50,7 +50,7 @@ public:
     void RasterizeTilesParallel(float screenWidth, float screenHeight);
     
     // 4. View integration: Culling for multiple views (Main, Shadow, etc.) at once
-    void PerformOcclusionTestParallel(const float* mvpMatrices, int instanceCount, size_t stride, const AABB& localBounds, float screenWidth, float screenHeight, std::vector<bool>& outVisibility);
+    void PerformOcclusionTestParallel(const float* vpMatrix, const float* modelMatrices, int instanceCount, size_t stride, const AABB& localBounds, float screenWidth, float screenHeight, std::vector<bool>& outVisibility);
 
     static const int DEPTH_RES_X = 256;
     static const int DEPTH_RES_Y = 128;
