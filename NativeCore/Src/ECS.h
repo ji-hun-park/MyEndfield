@@ -84,8 +84,9 @@ struct Archetype {
 };
 
 struct EntityRecord {
-    Chunk* chunk;
-    uint32_t index;
+    Chunk* chunk = nullptr;
+    uint32_t index = 0;
+    uint32_t revision = 0;
 };
 
 // Custom ECS Manager to bypass Unity DOTS
@@ -113,19 +114,21 @@ public:
 
     template<typename T>
     void SetComponentData(Entity entity, uint32_t componentBitIndex, const T& data) {
-        auto it = m_EntityMap.find(entity.id);
-        if (it != m_EntityMap.end()) {
-            T* array = GetComponentArray<T>(it->second.chunk, componentBitIndex);
-            if (array) {
-                array[it->second.index] = data;
+        if (entity.id < m_EntityRecords.size()) {
+            const EntityRecord& record = m_EntityRecords[entity.id];
+            if (record.revision == entity.revision && record.chunk != nullptr) {
+                T* array = GetComponentArray<T>(record.chunk, componentBitIndex);
+                if (array) {
+                    array[record.index] = data;
+                }
             }
         }
     }
 
 private:
     std::vector<std::unique_ptr<Archetype>> m_Archetypes;
-    std::unordered_map<uint32_t, EntityRecord> m_EntityMap;
-    uint32_t m_NextEntityId = 1;
+    std::vector<EntityRecord> m_EntityRecords;
+    std::vector<uint32_t> m_FreeEntityIds;
 
     Archetype* GetOrCreateArchetype(const ComponentMask& mask);
 };

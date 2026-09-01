@@ -110,7 +110,18 @@ Archetype* ECSManager::GetOrCreateArchetype(const ComponentMask& mask) {
 }
 
 Entity ECSManager::CreateEntity(const ComponentMask& mask) {
-    Entity ent = { m_NextEntityId++, 1 };
+    uint32_t id;
+    uint32_t revision = 1;
+    if (!m_FreeEntityIds.empty()) {
+        id = m_FreeEntityIds.back();
+        m_FreeEntityIds.pop_back();
+        revision = m_EntityRecords[id].revision + 1;
+    } else {
+        id = static_cast<uint32_t>(m_EntityRecords.size());
+        m_EntityRecords.emplace_back(); // default initialization
+    }
+
+    Entity ent = { id, revision };
     Archetype* arch = GetOrCreateArchetype(mask);
 
     Chunk* targetChunk = nullptr;
@@ -128,16 +139,18 @@ Entity ECSManager::CreateEntity(const ComponentMask& mask) {
     }
 
     uint32_t index = targetChunk->AddEntity(ent);
-    m_EntityMap[ent.id] = { targetChunk, index };
+    m_EntityRecords[id] = { targetChunk, index, revision };
 
     return ent;
 }
 
 void ECSManager::DestroyEntity(Entity entity) {
-    auto it = m_EntityMap.find(entity.id);
-    if (it == m_EntityMap.end()) return;
+    if (entity.id >= m_EntityRecords.size()) return;
+    EntityRecord& record = m_EntityRecords[entity.id];
+    
+    // Check revision to prevent double delete or deleting recycled entity
+    if (record.revision != entity.revision || record.chunk == nullptr) return;
 
-    EntityRecord record = it->second;
     Chunk* chunk = record.chunk;
     uint32_t deleteIndex = record.index;
     uint32_t lastIndex = chunk->entityCount - 1;
@@ -162,12 +175,14 @@ void ECSManager::DestroyEntity(Entity entity) {
         }
 
         // 3. 이동된 마지막 엔티티의 매핑 정보 갱신
-        m_EntityMap[lastEntity.id].index = deleteIndex;
+        m_EntityRecords[lastEntity.id].index = deleteIndex;
     }
 
     // 엔티티 개수를 줄이고(pop), 삭제된 엔티티 맵에서 제거
     chunk->entityCount--;
-    m_EntityMap.erase(entity.id);
+    record.chunk = nullptr;
+    
+    m_FreeEntityIds.push_back(entity.id);
 }
 
 std::vector<Chunk*> ECSManager::QueryChunks(const ComponentMask& queryMask) {

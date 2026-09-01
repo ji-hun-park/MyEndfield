@@ -21,10 +21,10 @@ TEST(ECSTests, CreateAndDestroyEntity) {
     mask.low = 0b001;
 
     Entity ent1 = manager.CreateEntity(mask);
-    EXPECT_EQ(ent1.id, 1u);
+    EXPECT_EQ(ent1.id, 0u);
 
     Entity ent2 = manager.CreateEntity(mask);
-    EXPECT_EQ(ent2.id, 2u);
+    EXPECT_EQ(ent2.id, 1u);
 
     std::vector<Chunk*> chunks = manager.QueryChunks(mask);
     ASSERT_FALSE(chunks.empty());
@@ -35,5 +35,5 @@ TEST(ECSTests, CreateAndDestroyEntity) {
     EXPECT_EQ(firstChunk->entityCount, 1u);
     
     // Test if the last entity was swapped
-    EXPECT_EQ(firstChunk->entityArray[0].id, 2u);
+    EXPECT_EQ(firstChunk->entityArray[0].id, 1u);
 }
