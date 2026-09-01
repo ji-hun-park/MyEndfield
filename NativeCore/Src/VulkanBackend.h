@@ -10,6 +10,8 @@
 #include "RenderGraph.h"
 #include "SortKey.h"
 #include "Culling.h"
+#include "ThreadPool.h"
+#include <memory>
 
 namespace Endfield {
 
@@ -142,14 +144,24 @@ private:
     VkDeviceMemory m_CameraUniformBufferMemory = VK_NULL_HANDLE;
     void* m_CameraUniformBufferMapped = nullptr;
 
+    struct IntermediateDrawCmd {
+        uint32_t descriptorSetPlaceholder; // 0x7F7F7F7F (더미 마커)
+        uint32_t materialID;
+        uint32_t meshId;
+        uint32_t subMeshIdx;
+        InstanceData data;
+    };
+
     VkDescriptorSet m_DescriptorSet2_Object = VK_NULL_HANDLE;
     std::vector<VkDescriptorSet> m_MaterialSets;
     uint32_t m_LastBoundMaterialSet = 0xFFFFFFFF;
     std::vector<InstanceData> m_PendingBatchData;
     std::vector<InstanceData> m_SortedInstances;
+    std::vector<IntermediateDrawCmd> m_IntermediateCmds;
 
     CullingSystem m_CullingSystem;
     RenderGraph m_RenderGraph;
+    std::unique_ptr<ThreadPool> m_ThreadPool;
 
     // Mesh Buffers
     std::vector<MeshBuffer> m_Meshes;

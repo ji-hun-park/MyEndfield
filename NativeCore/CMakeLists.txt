@@ -19,6 +19,8 @@ set(SOURCES
     Src/RenderGraph.cpp
     Src/VulkanBackend.h
     Src/VulkanBackend.cpp
+    Src/ThreadPool.h
+    Src/ThreadPool.cpp
 )
 
 # Shared library for Unity Plugin
@@ -66,6 +68,7 @@ add_executable(NativeCoreTests
     Src/SceneLoader.cpp
     Src/RenderGraph.cpp
     Src/PluginAPI.cpp
+    Src/ThreadPool.cpp
 )
 
 target_include_directories(NativeCoreTests PRIVATE 

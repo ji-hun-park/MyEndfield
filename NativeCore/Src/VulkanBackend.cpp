@@ -43,6 +43,9 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(
 
 VulkanBackend::VulkanBackend()
 {
+    unsigned int numThreads = std::thread::hardware_concurrency();
+    if (numThreads == 0) numThreads = 4;
+    m_ThreadPool = std::make_unique<ThreadPool>(numThreads);
 }
 
 VulkanBackend::~VulkanBackend()
@@ -1208,16 +1211,10 @@ void VulkanBackend::ExecuteOpaqueDraws(VkCommandBuffer cmdBuffer)
     // --- [1] 워커 스레드의 병렬 커맨드 빌드 단계 (Simulated) ---
     // 워커는 다른 워커가 어떤 머티리얼을 바인딩했는지 알 수 없으므로,
     // 일단 0x7F7F7F7F라는 플레이스홀더를 사용하여 디스크립터 바인딩 예약을 생성합니다.
-    
-    struct IntermediateDrawCmd {
-        uint32_t descriptorSetPlaceholder; // 0x7F7F7F7F (더미 마커)
-        uint32_t materialID;
-        uint32_t meshId;
-        uint32_t subMeshIdx;
-        InstanceData data;
-    };
 
-    std::vector<IntermediateDrawCmd> intermediateCmds(instanceCount); // reserve 대신 미리 할당
+    if (m_IntermediateCmds.size() < static_cast<size_t>(instanceCount)) {
+        m_IntermediateCmds.resize(instanceCount);
+    }
     const uint32_t PLACEHOLDER_BINDING = 0x7F7F7F7F;
 
     unsigned int numThreads = std::thread::hardware_concurrency();
@@ -1226,37 +1223,30 @@ void VulkanBackend::ExecuteOpaqueDraws(VkCommandBuffer cmdBuffer)
         numThreads = static_cast<unsigned int>(instanceCount);
     }
 
-    std::vector<std::thread> workers;
     int chunkSize = instanceCount / numThreads;
 
     for (unsigned int t = 0; t < numThreads; ++t) {
         int startIdx = t * chunkSize;
         int endIdx = (t == numThreads - 1) ? instanceCount : startIdx + chunkSize;
 
-        workers.emplace_back([startIdx, endIdx, sortedInstances, &intermediateCmds, PLACEHOLDER_BINDING]() {
+        m_ThreadPool->Enqueue([startIdx, endIdx, sortedInstances, this, PLACEHOLDER_BINDING]() {
             for (int i = startIdx; i < endIdx; ++i) {
                 const InstanceData& data = sortedInstances[i];
                 IntermediateDrawCmd cmd;
                 
-                // 앞뒤 문맥(Context)을 모르는 워커 스레드의 행동: 무조건 플레이스홀더 기록
                 cmd.descriptorSetPlaceholder = PLACEHOLDER_BINDING;
                 cmd.materialID = data.sortKey.materialID;
                 cmd.meshId = data.sortKey.pipelineID;
                 cmd.subMeshIdx = data.subMeshIndex;
                 cmd.data = data;
                 
-                // 락(Lock) 없이 각자 독립된 인덱스 공간에 기록
-                intermediateCmds[i] = cmd;
+                this->m_IntermediateCmds[i] = cmd;
             }
         });
     }
 
-    // 워커 스레드가 커맨드 빌드를 모두 마칠 때까지 대기 (조인)
-    for (auto& worker : workers) {
-        if (worker.joinable()) {
-            worker.join();
-        }
-    }
+    // 워커 스레드가 커맨드 빌드를 모두 마칠 때까지 대기
+    m_ThreadPool->WaitAll();
 
     // --- [2] 최종 정리(Finalize) 단계 ---
     // 정렬(Sort)이 완료된 상태에서 순차적으로 커맨드를 순회하며 중복 바인딩을 제거(Skip)합니다.
@@ -1265,7 +1255,7 @@ void VulkanBackend::ExecuteOpaqueDraws(VkCommandBuffer cmdBuffer)
     uint32_t lastBoundMaterialSet = 0xFFFFFFFF; // 매 프레임/드로우콜 배치 시작 시 상태 캐시 리셋!
 
     for (int i = 0; i < instanceCount; ++i) {
-        IntermediateDrawCmd& cmd = intermediateCmds[i];
+        IntermediateDrawCmd& cmd = m_IntermediateCmds[i];
 
         // 상태 캐싱: 이전 인스턴스와 같은 머티리얼(파이프라인 상태)이라면 바인딩 생략
         if (cmd.materialID != lastBoundMaterialSet) {
