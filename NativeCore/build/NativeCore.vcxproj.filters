@@ -19,6 +19,9 @@
     <ClCompile Include="D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\Src\VulkanBackend.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\Src\ThreadPool.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\Src\PluginAPI.h">
@@ -40,6 +43,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\Src\VulkanBackend.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\Src\ThreadPool.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

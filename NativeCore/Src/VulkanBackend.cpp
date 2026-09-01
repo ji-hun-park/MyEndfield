@@ -10,6 +10,7 @@
 #include <vector>
 #include <thread>
 #include <stdexcept>
+#include <cstddef>
 
 namespace Endfield {
 
@@ -601,10 +602,37 @@ VkPipelineShaderStageCreateInfo VulkanBackend::CreateShaderStageInfo(VkShaderSta
 }
 
 VkPipelineVertexInputStateCreateInfo VulkanBackend::CreateVertexInputStateInfo() {
+    static VkVertexInputBindingDescription bindingDescription{};
+    bindingDescription.binding = 0;
+    bindingDescription.stride = sizeof(Vertex);
+    bindingDescription.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+    static std::vector<VkVertexInputAttributeDescription> attributeDescriptions(3);
+    
+    // Position
+    attributeDescriptions[0].binding = 0;
+    attributeDescriptions[0].location = 0;
+    attributeDescriptions[0].format = VK_FORMAT_R32G32B32_SFLOAT;
+    attributeDescriptions[0].offset = offsetof(Vertex, posX);
+
+    // Normal
+    attributeDescriptions[1].binding = 0;
+    attributeDescriptions[1].location = 1;
+    attributeDescriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT;
+    attributeDescriptions[1].offset = offsetof(Vertex, normX);
+
+    // UV
+    attributeDescriptions[2].binding = 0;
+    attributeDescriptions[2].location = 2;
+    attributeDescriptions[2].format = VK_FORMAT_R32G32_SFLOAT;
+    attributeDescriptions[2].offset = offsetof(Vertex, uvX);
+
     VkPipelineVertexInputStateCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    info.vertexBindingDescriptionCount = 0;
-    info.vertexAttributeDescriptionCount = 0;
+    info.vertexBindingDescriptionCount = 1;
+    info.pVertexBindingDescriptions = &bindingDescription;
+    info.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size());
+    info.pVertexAttributeDescriptions = attributeDescriptions.data();
     return info;
 }
 
@@ -1250,6 +1278,20 @@ void VulkanBackend::ExecuteOpaqueDraws(VkCommandBuffer cmdBuffer)
 
     // --- [2] 최종 정리(Finalize) 단계 ---
     // 정렬(Sort)이 완료된 상태에서 순차적으로 커맨드를 순회하며 중복 바인딩을 제거(Skip)합니다.
+
+    VkViewport viewport{};
+    viewport.x = 0.0f;
+    viewport.y = 0.0f;
+    viewport.width = (float)m_SwapchainExtent.width;
+    viewport.height = (float)m_SwapchainExtent.height;
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+    vkCmdSetViewport(cmdBuffer, 0, 1, &viewport);
+
+    VkRect2D scissor{};
+    scissor.offset = {0, 0};
+    scissor.extent = m_SwapchainExtent;
+    vkCmdSetScissor(cmdBuffer, 0, 1, &scissor);
 
     int instanceIndex = 0;
     uint32_t lastBoundMaterialSet = 0xFFFFFFFF; // 매 프레임/드로우콜 배치 시작 시 상태 캐시 리셋!

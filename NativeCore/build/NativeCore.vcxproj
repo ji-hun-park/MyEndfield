@@ -394,6 +394,8 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     <ClCompile Include="D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\Src\RenderGraph.cpp" />
     <ClInclude Include="D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\Src\VulkanBackend.h" />
     <ClCompile Include="D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\Src\VulkanBackend.cpp" />
+    <ClInclude Include="D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\Src\ThreadPool.h" />
+    <ClCompile Include="D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\Src\ThreadPool.cpp" />
   </ItemGroup>
   <ItemGroup />
   <ItemGroup>
