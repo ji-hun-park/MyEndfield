@@ -1731,6 +1731,9 @@ void VulkanBackend::UploadMesh(const std::vector<Vertex>& vertices, const std::v
 }
 
 } // namespace Endfield
-v o i d   E n d f i e l d : : V u l k a n B a c k e n d : : W a i t D e v i c e I d l e ( )   {   i f   ( m _ D e v i c e )   v k D e v i c e W a i t I d l e ( m _ D e v i c e ) ;   } 
- 
- 
+
+void Endfield::VulkanBackend::WaitDeviceIdle() {
+    if (m_Device) {
+        vkDeviceWaitIdle(m_Device);
+    }
+}
