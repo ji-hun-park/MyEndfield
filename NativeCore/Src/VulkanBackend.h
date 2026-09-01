@@ -58,6 +58,7 @@ public:
     bool BeginFrame();
     void SubmitBatch(const void* batchData, int instanceCount);
     void EndFrame();
+    void WaitDeviceIdle();
 
     void ExecuteOpaqueDraws(VkCommandBuffer cmdBuffer);
 

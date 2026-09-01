@@ -25,9 +25,18 @@ static std::atomic<bool> g_WindowThreadRunning{false};
 static std::condition_variable g_WindowCV;
 static std::mutex g_WindowInitMutex;
 
+static std::atomic<bool> g_WindowShouldClose{false};
+static std::atomic<bool> g_WindowSafeToDestroy{false};
+#define WM_SAFE_DESTROY (WM_USER + 1)
+
 static LRESULT CALLBACK StandaloneWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
         case WM_CLOSE:
+            g_WindowShouldClose = true;
+            return 0; // Prevent immediate destruction
+        case WM_SAFE_DESTROY:
+            DestroyWindow(hwnd);
+            return 0;
         case WM_DESTROY:
             PostQuitMessage(0);
             return 0;
@@ -87,6 +96,7 @@ static void WindowThreadFunc(uint32_t width, uint32_t height) {
         }
     }
     g_WindowThreadRunning = false;
+    g_StandaloneWindow = NULL;
 }
 #endif
 
@@ -94,10 +104,18 @@ extern "C" {
 
 ENDFIELD_API void InitializeVulkanRenderer(void* windowHandle, uint32_t width, uint32_t height)
 {
+#if defined(_WIN32) || defined(_WIN64)
+    g_WindowShouldClose = false;
+    g_WindowSafeToDestroy = false;
+#endif
+
     if (!g_Backend) {
 #if defined(_WIN32) || defined(_WIN64)
         if (!g_StandaloneWindow) {
             std::unique_lock<std::mutex> lock(g_WindowInitMutex);
+            if (g_WindowThread.joinable()) {
+                g_WindowThread.join();
+            }
             g_WindowThread = std::thread(WindowThreadFunc, width, height);
             g_WindowCV.wait(lock, []{ return g_WindowThreadRunning.load(); });
         }
@@ -149,12 +167,12 @@ ENDFIELD_API void ShutdownVulkanRenderer()
 
 #if defined(_WIN32) || defined(_WIN64)
     if (g_StandaloneWindow) {
-        PostMessageA(g_StandaloneWindow, WM_CLOSE, 0, 0);
-        if (g_WindowThread.joinable()) {
-            g_WindowThread.join();
-        }
-        g_StandaloneWindow = NULL;
+        PostMessageA(g_StandaloneWindow, WM_SAFE_DESTROY, 0, 0);
     }
+    if (g_WindowThread.joinable()) {
+        g_WindowThread.join();
+    }
+    g_StandaloneWindow = NULL;
 #endif
 }
 
@@ -165,6 +183,24 @@ ENDFIELD_API void ExecuteNativeRenderLoop()
 {
     std::lock_guard<std::mutex> lock(g_NativeMutex);
     try {
+#if defined(_WIN32) || defined(_WIN64)
+        if (g_WindowShouldClose.load() && !g_WindowSafeToDestroy.load()) {
+            // Signal Vulkan Backend to stop using the surface and cleanup if necessary
+            if (g_Backend) {
+                // We shouldn't destroy backend completely here because Unity might call ShutdownVulkanRenderer later
+                // Wait for the device to be idle before destroying the window, to ensure no Vulkan queues are using the surface
+                g_Backend->WaitDeviceIdle();
+                g_WindowSafeToDestroy = true;
+                if (g_StandaloneWindow) {
+                    PostMessageA(g_StandaloneWindow, WM_SAFE_DESTROY, 0, 0);
+                }
+            }
+            return;
+        }
+        if (g_WindowShouldClose.load()) {
+            return; // Skip rendering
+        }
+#endif
         if (g_Backend) {
             if (g_Backend->BeginFrame()) {
             
