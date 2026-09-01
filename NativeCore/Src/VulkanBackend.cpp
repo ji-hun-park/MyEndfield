@@ -850,8 +850,8 @@ void VulkanBackend::CreateDescriptorResources()
         m_DynamicAlignment = (m_DynamicAlignment + minAlignment - 1) & ~(minAlignment - 1);
     }
     
-    // Allocate space for up to 100000 objects
-    uint32_t MAX_DYNAMIC_OBJECTS = 100000;
+    // Allocate space for up to 200000 objects
+    uint32_t MAX_DYNAMIC_OBJECTS = 200000;
     size_t dynamicBufferSize = MAX_DYNAMIC_OBJECTS * m_DynamicAlignment;
     CreateBuffer(dynamicBufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, m_ObjectDynamicBuffer, m_ObjectDynamicBufferMemory);
     vkMapMemory(m_Device, m_ObjectDynamicBufferMemory, 0, dynamicBufferSize, 0, &m_ObjectDynamicBufferMapped);
@@ -1356,8 +1356,8 @@ void VulkanBackend::ExecuteOpaqueDraws(VkCommandBuffer cmdBuffer)
     // 일단 0x7F7F7F7F라는 플레이스홀더를 사용하여 디스크립터 바인딩 예약을 생성합니다.
 
     int visibleCount = static_cast<int>(m_SortedInstances.size());
-    if (visibleCount > 100000) {
-        visibleCount = 100000;
+    if (visibleCount > 200000) {
+        visibleCount = 200000;
         LogToUnity("[VulkanBackend WARNING] Too many instances! Truncated to 100,000.");
     }
     
@@ -1731,5 +1731,6 @@ void VulkanBackend::UploadMesh(const std::vector<Vertex>& vertices, const std::v
 }
 
 } // namespace Endfield
-v o i d   E n d f i e l d : : V u l k a n B a c k e n d : : W a i t D e v i c e I d l e ( )   {   i f   ( m _ D e v i c e )   v k D e v i c e W a i t I d l e ( m _ D e v i c e ) ;   }  
+v o i d   E n d f i e l d : : V u l k a n B a c k e n d : : W a i t D e v i c e I d l e ( )   {   i f   ( m _ D e v i c e )   v k D e v i c e W a i t I d l e ( m _ D e v i c e ) ;   } 
+ 
  
