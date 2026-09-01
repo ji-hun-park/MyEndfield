@@ -1419,6 +1419,9 @@ void VulkanBackend::EndFrame()
         throw std::runtime_error("[VulkanBackend ERROR] Failed to present swapchain image!");
     }
 
+    // Wait for presentation to complete to avoid swapchain semaphore reuse validation errors
+    vkQueueWaitIdle(m_PresentQueue);
+
     m_CurrentFrame = (m_CurrentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
 }
 
