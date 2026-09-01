@@ -336,9 +336,10 @@ void VulkanBackend::CreateCommandObjects()
     allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
     allocInfo.commandPool = m_CommandPool;
     allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    allocInfo.commandBufferCount = 1;
+    allocInfo.commandBufferCount = (uint32_t)MAX_FRAMES_IN_FLIGHT;
 
-    if (vkAllocateCommandBuffers(m_Device, &allocInfo, &m_CommandBuffer) != VK_SUCCESS) {
+    m_CommandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+    if (vkAllocateCommandBuffers(m_Device, &allocInfo, m_CommandBuffers.data()) != VK_SUCCESS) {
         throw std::runtime_error("[VulkanBackend ERROR] Failed to allocate command buffers!");
     }
 }
@@ -869,13 +870,18 @@ void VulkanBackend::CreateSyncObjects()
     fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
     fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT; // Initialize as signaled
 
-    if (vkCreateSemaphore(m_Device, &semaphoreInfo, nullptr, &m_ImageAvailableSemaphore) != VK_SUCCESS ||
-        vkCreateSemaphore(m_Device, &semaphoreInfo, nullptr, &m_RenderFinishedSemaphore) != VK_SUCCESS ||
-        vkCreateFence(m_Device, &fenceInfo, nullptr, &m_InFlightFence) != VK_SUCCESS) {
-        throw std::runtime_error("[VulkanBackend ERROR] Failed to create synchronization objects!");
-    } else {
-        LogToUnity("[VulkanBackend] Synchronization objects created successfully.");
+    m_ImageAvailableSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
+    m_RenderFinishedSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
+    m_InFlightFences.resize(MAX_FRAMES_IN_FLIGHT);
+
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        if (vkCreateSemaphore(m_Device, &semaphoreInfo, nullptr, &m_ImageAvailableSemaphores[i]) != VK_SUCCESS ||
+            vkCreateSemaphore(m_Device, &semaphoreInfo, nullptr, &m_RenderFinishedSemaphores[i]) != VK_SUCCESS ||
+            vkCreateFence(m_Device, &fenceInfo, nullptr, &m_InFlightFences[i]) != VK_SUCCESS) {
+            throw std::runtime_error("[VulkanBackend ERROR] Failed to create synchronization objects!");
+        }
     }
+    LogToUnity("[VulkanBackend] Synchronization objects created successfully.");
 }
 
 void VulkanBackend::Shutdown()
@@ -887,17 +893,16 @@ void VulkanBackend::Shutdown()
         m_RenderGraph.Clear();
 
         // 13. Sync Objects
-        if (m_ImageAvailableSemaphore) {
-            vkDestroySemaphore(m_Device, m_ImageAvailableSemaphore, nullptr);
-            m_ImageAvailableSemaphore = VK_NULL_HANDLE;
-        }
-        if (m_RenderFinishedSemaphore) {
-            vkDestroySemaphore(m_Device, m_RenderFinishedSemaphore, nullptr);
-            m_RenderFinishedSemaphore = VK_NULL_HANDLE;
-        }
-        if (m_InFlightFence) {
-            vkDestroyFence(m_Device, m_InFlightFence, nullptr);
-            m_InFlightFence = VK_NULL_HANDLE;
+        for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+            if (m_ImageAvailableSemaphores[i]) {
+                vkDestroySemaphore(m_Device, m_ImageAvailableSemaphores[i], nullptr);
+            }
+            if (m_RenderFinishedSemaphores[i]) {
+                vkDestroySemaphore(m_Device, m_RenderFinishedSemaphores[i], nullptr);
+            }
+            if (m_InFlightFences[i]) {
+                vkDestroyFence(m_Device, m_InFlightFences[i], nullptr);
+            }
         }
 
         // 12. Graphics Pipeline
@@ -1143,32 +1148,33 @@ void VulkanBackend::RecreateSwapchain() {
 
 bool VulkanBackend::BeginFrame()
 {
-    if (m_Device == VK_NULL_HANDLE || m_CommandBuffer == VK_NULL_HANDLE || m_Swapchain == VK_NULL_HANDLE) return false;
+    if (m_Device == VK_NULL_HANDLE || m_Swapchain == VK_NULL_HANDLE) return false;
 
     // Wait for the previous frame to finish
-    vkWaitForFences(m_Device, 1, &m_InFlightFence, VK_TRUE, UINT64_MAX);
+    vkWaitForFences(m_Device, 1, &m_InFlightFences[m_CurrentFrame], VK_TRUE, UINT64_MAX);
 
     // Acquire next image from swapchain
-    VkResult acquireResult = vkAcquireNextImageKHR(m_Device, m_Swapchain, UINT64_MAX, m_ImageAvailableSemaphore, VK_NULL_HANDLE, &m_CurrentImageIndex);
+    VkResult acquireResult = vkAcquireNextImageKHR(m_Device, m_Swapchain, UINT64_MAX, m_ImageAvailableSemaphores[m_CurrentFrame], VK_NULL_HANDLE, &m_CurrentImageIndex);
     if (acquireResult == VK_ERROR_OUT_OF_DATE_KHR) {
         RecreateSwapchain();
         return false;
     }
     
-    // Acquire가 성공한 이후에 펜스를 리셋해야 데드락(Deadlock)을 방지할 수 있습니다.
-    vkResetFences(m_Device, 1, &m_InFlightFence);
+    // Reset fence only after we successfully acquired the image!
+    vkResetFences(m_Device, 1, &m_InFlightFences[m_CurrentFrame]);
 
     // Reset and begin command buffer
-    vkResetCommandBuffer(m_CommandBuffer, 0);
+    VkCommandBuffer cmdBuffer = m_CommandBuffers[m_CurrentFrame];
+    vkResetCommandBuffer(cmdBuffer, 0);
 
-    // 새 프레임 렌더링을 위해 펜딩 배치 데이터 초기화
+    // Clear pending batch data for the new frame
     m_PendingBatchData.clear();
 
     VkCommandBufferBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 
-    if (vkBeginCommandBuffer(m_CommandBuffer, &beginInfo) != VK_SUCCESS) {
+    if (vkBeginCommandBuffer(cmdBuffer, &beginInfo) != VK_SUCCESS) {
         throw std::runtime_error("[VulkanBackend ERROR] Failed to begin recording command buffer!");
     }
     
@@ -1363,12 +1369,14 @@ void VulkanBackend::ExecuteOpaqueDraws(VkCommandBuffer cmdBuffer)
 
 void VulkanBackend::EndFrame()
 {
-    if (m_CommandBuffer == VK_NULL_HANDLE || m_Device == VK_NULL_HANDLE) return;
+    if (m_Device == VK_NULL_HANDLE || m_CommandBuffers.empty()) return;
 
-    // 그래프 배리어 병합 및 패스 실행을 여기서 일괄 수행합니다!
-    m_RenderGraph.Execute(m_CommandBuffer);
+    VkCommandBuffer cmdBuffer = m_CommandBuffers[m_CurrentFrame];
 
-    if (vkEndCommandBuffer(m_CommandBuffer) != VK_SUCCESS) {
+    // Execute render graph
+    m_RenderGraph.Execute(cmdBuffer);
+
+    if (vkEndCommandBuffer(cmdBuffer) != VK_SUCCESS) {
         throw std::runtime_error("[VulkanBackend ERROR] Failed to record command buffer!");
     }
     
@@ -1376,20 +1384,20 @@ void VulkanBackend::EndFrame()
     VkSubmitInfo submitInfo{};
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 
-    VkSemaphore waitSemaphores[] = {m_ImageAvailableSemaphore};
+    VkSemaphore waitSemaphores[] = {m_ImageAvailableSemaphores[m_CurrentFrame]};
     VkPipelineStageFlags waitStages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
     submitInfo.waitSemaphoreCount = 1;
     submitInfo.pWaitSemaphores = waitSemaphores;
     submitInfo.pWaitDstStageMask = waitStages;
 
     submitInfo.commandBufferCount = 1;
-    submitInfo.pCommandBuffers = &m_CommandBuffer;
+    submitInfo.pCommandBuffers = &cmdBuffer;
     
-    VkSemaphore signalSemaphores[] = {m_RenderFinishedSemaphore};
+    VkSemaphore signalSemaphores[] = {m_RenderFinishedSemaphores[m_CurrentFrame]};
     submitInfo.signalSemaphoreCount = 1;
     submitInfo.pSignalSemaphores = signalSemaphores;
 
-    if (vkQueueSubmit(m_GraphicsQueue, 1, &submitInfo, m_InFlightFence) != VK_SUCCESS) {
+    if (vkQueueSubmit(m_GraphicsQueue, 1, &submitInfo, m_InFlightFences[m_CurrentFrame]) != VK_SUCCESS) {
         throw std::runtime_error("[VulkanBackend ERROR] Failed to submit draw command buffer!");
     }
     
@@ -1410,6 +1418,8 @@ void VulkanBackend::EndFrame()
     } else if (presentResult != VK_SUCCESS) {
         throw std::runtime_error("[VulkanBackend ERROR] Failed to present swapchain image!");
     }
+
+    m_CurrentFrame = (m_CurrentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
 }
 
 VkFormat VulkanBackend::FindSupportedFormat(const std::vector<VkFormat>& candidates, VkImageTiling tiling, VkFormatFeatureFlags features) {

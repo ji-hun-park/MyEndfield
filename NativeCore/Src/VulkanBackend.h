@@ -112,7 +112,10 @@ private:
     uint32_t m_PresentQueueFamilyIndex = 0;
 
     VkCommandPool m_CommandPool = VK_NULL_HANDLE;
-    VkCommandBuffer m_CommandBuffer = VK_NULL_HANDLE;
+    
+    static const int MAX_FRAMES_IN_FLIGHT = 2;
+    uint32_t m_CurrentFrame = 0;
+    std::vector<VkCommandBuffer> m_CommandBuffers;
     
     VkSwapchainKHR m_Swapchain = VK_NULL_HANDLE;
     std::vector<VkImage> m_SwapchainImages;
@@ -125,9 +128,9 @@ private:
     VkPipelineLayout m_PipelineLayout = VK_NULL_HANDLE;
     VkPipeline m_GraphicsPipeline = VK_NULL_HANDLE;
 
-    VkSemaphore m_ImageAvailableSemaphore = VK_NULL_HANDLE;
-    VkSemaphore m_RenderFinishedSemaphore = VK_NULL_HANDLE;
-    VkFence m_InFlightFence = VK_NULL_HANDLE;
+    std::vector<VkSemaphore> m_ImageAvailableSemaphores;
+    std::vector<VkSemaphore> m_RenderFinishedSemaphores;
+    std::vector<VkFence> m_InFlightFences;
     uint32_t m_CurrentImageIndex = 0;
 
     // Descriptor Sets
