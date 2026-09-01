@@ -1007,24 +1007,24 @@ void VulkanBackend::SetupRenderGraph()
 
         if (m_GraphicsPipeline != VK_NULL_HANDLE) {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_GraphicsPipeline);
+
+            VkViewport viewport{};
+            viewport.x = 0.0f;
+            viewport.y = 0.0f;
+            viewport.width = (float) m_SwapchainExtent.width;
+            viewport.height = (float) m_SwapchainExtent.height;
+            viewport.minDepth = 0.0f;
+            viewport.maxDepth = 1.0f;
+            vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+            VkRect2D scissor{};
+            scissor.offset = {0, 0};
+            scissor.extent = m_SwapchainExtent;
+            vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+            // 파이프라인이 바인딩되었을 때만 실제 드로우콜 수행
+            ExecuteOpaqueDraws(cmd);
         }
-
-        VkViewport viewport{};
-        viewport.x = 0.0f;
-        viewport.y = 0.0f;
-        viewport.width = (float) m_SwapchainExtent.width;
-        viewport.height = (float) m_SwapchainExtent.height;
-        viewport.minDepth = 0.0f;
-        viewport.maxDepth = 1.0f;
-        vkCmdSetViewport(cmd, 0, 1, &viewport);
-
-        VkRect2D scissor{};
-        scissor.offset = {0, 0};
-        scissor.extent = m_SwapchainExtent;
-        vkCmdSetScissor(cmd, 0, 1, &scissor);
-
-        // 이전 SubmitBatch에서 넘겨받았던 드로우콜 리스트 실행
-        ExecuteOpaqueDraws(cmd);
 
         vkCmdEndRenderPass(cmd);
     });
@@ -1089,7 +1089,6 @@ bool VulkanBackend::BeginFrame()
 
     // Wait for the previous frame to finish
     vkWaitForFences(m_Device, 1, &m_InFlightFence, VK_TRUE, UINT64_MAX);
-    vkResetFences(m_Device, 1, &m_InFlightFence);
 
     // Acquire next image from swapchain
     VkResult acquireResult = vkAcquireNextImageKHR(m_Device, m_Swapchain, UINT64_MAX, m_ImageAvailableSemaphore, VK_NULL_HANDLE, &m_CurrentImageIndex);
@@ -1097,6 +1096,9 @@ bool VulkanBackend::BeginFrame()
         RecreateSwapchain();
         return false;
     }
+    
+    // Acquire가 성공한 이후에 펜스를 리셋해야 데드락(Deadlock)을 방지할 수 있습니다.
+    vkResetFences(m_Device, 1, &m_InFlightFence);
 
     // Reset and begin command buffer
     vkResetCommandBuffer(m_CommandBuffer, 0);
@@ -1240,13 +1242,15 @@ void VulkanBackend::ExecuteOpaqueDraws(VkCommandBuffer cmdBuffer)
     // 정렬(Sort)이 완료된 상태에서 순차적으로 커맨드를 순회하며 중복 바인딩을 제거(Skip)합니다.
 
     int instanceIndex = 0;
+    uint32_t lastBoundMaterialSet = 0xFFFFFFFF; // 매 프레임/드로우콜 배치 시작 시 상태 캐시 리셋!
+
     for (int i = 0; i < instanceCount; ++i) {
         IntermediateDrawCmd& cmd = intermediateCmds[i];
 
         // 상태 캐싱: 이전 인스턴스와 같은 머티리얼(파이프라인 상태)이라면 바인딩 생략
-        if (cmd.materialID != m_LastBoundMaterialSet) {
+        if (cmd.materialID != lastBoundMaterialSet) {
             cmd.descriptorSetPlaceholder = cmd.materialID; // 실제 바인딩 ID로 리졸브(Resolve)
-            m_LastBoundMaterialSet = cmd.materialID;
+            lastBoundMaterialSet = cmd.materialID;
             
             // 실제 디스크립터 바인딩 기록
             // 유니티 플러그인 특성상 미리 바인딩된 Set 1(텍스처/머티리얼 정보)을 사용합니다.
@@ -1343,9 +1347,13 @@ void VulkanBackend::EndFrame()
     presentInfo.swapchainCount = 1;
     presentInfo.pSwapchains = swapchains;
     presentInfo.pImageIndices = &m_CurrentImageIndex;
-    presentInfo.pResults = nullptr;
-
-    vkQueuePresentKHR(m_PresentQueue, &presentInfo);
+    VkResult presentResult = vkQueuePresentKHR(m_PresentQueue, &presentInfo);
+    
+    if (presentResult == VK_ERROR_OUT_OF_DATE_KHR || presentResult == VK_SUBOPTIMAL_KHR) {
+        RecreateSwapchain();
+    } else if (presentResult != VK_SUCCESS) {
+        LogToUnity("[VulkanBackend ERROR] Failed to present swapchain image!");
+    }
 }
 
 VkFormat VulkanBackend::FindSupportedFormat(const std::vector<VkFormat>& candidates, VkImageTiling tiling, VkFormatFeatureFlags features) {
