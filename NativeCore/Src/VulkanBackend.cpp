@@ -847,6 +847,8 @@ void VulkanBackend::Shutdown()
     if (m_Device) {
         vkDeviceWaitIdle(m_Device);
         
+        m_RenderGraph.Clear();
+
         // 13. Sync Objects
         if (m_ImageAvailableSemaphore) {
             vkDestroySemaphore(m_Device, m_ImageAvailableSemaphore, nullptr);
@@ -978,6 +980,9 @@ void VulkanBackend::Shutdown()
 
 void VulkanBackend::SetupRenderGraph()
 {
+    // 이전 그래프 정보가 존재한다면 비우기
+    m_RenderGraph.Clear();
+
     // 1. Declare resources
     m_RenderGraph.AddResource("GBufferColor", true, AccessTag::None);
     m_RenderGraph.AddResource("GBufferDepth", true, AccessTag::None);
@@ -1060,6 +1065,20 @@ void VulkanBackend::CleanupSwapchain() {
         vkDestroyFramebuffer(m_Device, framebuffer, nullptr);
     }
     m_SwapchainFramebuffers.clear();
+
+    if (m_GraphicsPipeline) { 
+        vkDestroyPipeline(m_Device, m_GraphicsPipeline, nullptr); 
+        m_GraphicsPipeline = VK_NULL_HANDLE; 
+    }
+    if (m_PipelineLayout) { 
+        vkDestroyPipelineLayout(m_Device, m_PipelineLayout, nullptr); 
+        m_PipelineLayout = VK_NULL_HANDLE; 
+    }
+    if (m_RenderPass) { 
+        vkDestroyRenderPass(m_Device, m_RenderPass, nullptr); 
+        m_RenderPass = VK_NULL_HANDLE; 
+    }
+
     if (m_DepthImageView != VK_NULL_HANDLE) { vkDestroyImageView(m_Device, m_DepthImageView, nullptr); m_DepthImageView = VK_NULL_HANDLE; }
     if (m_DepthImage != VK_NULL_HANDLE) { vkDestroyImage(m_Device, m_DepthImage, nullptr); m_DepthImage = VK_NULL_HANDLE; }
     if (m_DepthImageMemory != VK_NULL_HANDLE) { vkFreeMemory(m_Device, m_DepthImageMemory, nullptr); m_DepthImageMemory = VK_NULL_HANDLE; }
@@ -1080,6 +1099,8 @@ void VulkanBackend::RecreateSwapchain() {
     CleanupSwapchain();
     CreateSwapchain();
     CreateDepthResources();
+    CreateRenderPass();
+    CreateGraphicsPipeline();
     CreateFramebuffers();
 }
 

@@ -201,7 +201,6 @@ void RenderGraph::CompileGraph()
                 allocInfo.descriptorSetCount = 1;
                 allocInfo.pSetLayouts = &m_SetLayout;
 
-                // TODO: 렌더 패스가 삭제/재구성될 때의 해제 로직 필요
                 vkAllocateDescriptorSets(m_Device, &allocInfo, &pass.boundDescriptorSet);
 
                 // 안전하게 포인터 매핑
@@ -215,6 +214,18 @@ void RenderGraph::CompileGraph()
             }
         }
     }
+}
+
+void RenderGraph::Clear()
+{
+    // 디스크립터 풀을 별도로 리셋해야 할 경우 이 안에서 처리 (현재는 런타임 캐싱용)
+    if (m_Device != VK_NULL_HANDLE && m_DescriptorPool != VK_NULL_HANDLE) {
+        // vkResetDescriptorPool(m_Device, m_DescriptorPool, 0); // 필요 시 활성화
+    }
+
+    m_Resources.clear();
+    m_Passes.clear();
+    m_PassBarriers.clear();
 }
 
 void RenderGraph::Execute(VkCommandBuffer cmdBuffer)

@@ -71,6 +71,9 @@ public:
     // 미리 컴파일된 배리어를 실행하고 디스크립터를 바인딩하며 패스를 구동합니다.
     void Execute(VkCommandBuffer cmdBuffer); 
 
+    // 렌더 패스가 재구성되거나 삭제될 때 메모리 및 컨테이너를 비우는 해제 로직
+    void Clear();
+
 private:
     std::unordered_map<std::string, RenderResource> m_Resources;
     std::vector<RenderPassNode> m_Passes;
