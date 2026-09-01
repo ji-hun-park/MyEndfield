@@ -742,17 +742,14 @@ void VulkanBackend::CreateGraphicsPipeline()
     dynamicState.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
     dynamicState.pDynamicStates = dynamicStates.data();
 
-    VkPushConstantRange pushConstantRange{};
-    pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
-    pushConstantRange.offset = 0;
-    pushConstantRange.size = sizeof(InstanceData);
+    VkDescriptorSetLayout layouts[] = { m_DescriptorSetLayout, m_DescriptorSetLayout1_Material, m_DescriptorSetLayout2_Object };
 
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    pipelineLayoutInfo.setLayoutCount = 1;
-    pipelineLayoutInfo.pSetLayouts = &m_DescriptorSetLayout;
-    pipelineLayoutInfo.pushConstantRangeCount = 1;
-    pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
+    pipelineLayoutInfo.setLayoutCount = 3;
+    pipelineLayoutInfo.pSetLayouts = layouts;
+    pipelineLayoutInfo.pushConstantRangeCount = 0;
+    pipelineLayoutInfo.pPushConstantRanges = nullptr;
 
     if (vkCreatePipelineLayout(m_Device, &pipelineLayoutInfo, nullptr, &m_PipelineLayout) != VK_SUCCESS) {
         throw std::runtime_error("[VulkanBackend ERROR] Failed to create pipeline layout!");
@@ -1312,13 +1309,14 @@ void VulkanBackend::ExecuteOpaqueDraws(VkCommandBuffer cmdBuffer)
     m_CullingSystem.RasterizeTilesParallel(m_SwapchainExtent.width, m_SwapchainExtent.height);
      
     std::vector<bool> visibilityResults;
-    AABB defaultLocalBounds = { {-1, -1, -1}, {1, 1, 1} };
+    visibilityResults.resize(instanceCount, true); // BYPASS occlusion culling
+    // AABB defaultLocalBounds = { {-1, -1, -1}, {1, 1, 1} };
     
     // Note: instances[0].mvpMatrix is actually the MODEL matrix because of push constant layout
-    m_CullingSystem.PerformOcclusionTestParallel(
-        vp, reinterpret_cast<const float*>(instances), instanceCount, sizeof(InstanceData), 
-        defaultLocalBounds, m_SwapchainExtent.width, m_SwapchainExtent.height, visibilityResults
-    );
+    // m_CullingSystem.PerformOcclusionTestParallel(
+    //     vp, reinterpret_cast<const float*>(instances), instanceCount, sizeof(InstanceData), 
+    //     defaultLocalBounds, m_SwapchainExtent.width, m_SwapchainExtent.height, visibilityResults
+    // );
 
     // --- [0] 64비트 정렬 키 기반의 오브젝트 정렬 (Sorting) ---
     // Endfield 문서: "정렬 비교는 16바이트짜리 값에 대한 분기 비교이며, 표준 정렬(std::sort)을 그대로 사용합니다."
@@ -1434,10 +1432,14 @@ void VulkanBackend::ExecuteOpaqueDraws(VkCommandBuffer cmdBuffer)
             }
         }
 
-        // --- [3] 실제 Draw Call 기록 ---
-        // 셰이더가 layout(push_constant)를 사용하므로 push constants 바인딩
-        if (m_PipelineLayout != VK_NULL_HANDLE) {
-            vkCmdPushConstants(cmdBuffer, m_PipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(InstanceData), &cmd.data);
+        // --- [3] Copy to Dynamic Uniform Buffer ---
+        // Instead of Push Constants, copy data to mapped buffer and bind descriptor set 2
+        uint32_t dynamicOffset = i * static_cast<uint32_t>(m_DynamicAlignment);
+        memcpy(reinterpret_cast<char*>(m_ObjectDynamicBufferMapped) + dynamicOffset, &cmd.data, sizeof(InstanceData));
+
+        if (m_PipelineLayout != VK_NULL_HANDLE && m_DescriptorSet2_Object != VK_NULL_HANDLE) {
+            vkCmdBindDescriptorSets(cmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, 
+                                    m_PipelineLayout, 2, 1, &m_DescriptorSet2_Object, 1, &dynamicOffset);
         }
 
         if (cmd.meshId < m_Meshes.size()) {

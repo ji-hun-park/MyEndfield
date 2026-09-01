@@ -109,8 +109,6 @@ ENDFIELD_API void InitializeVulkanRenderer(void* windowHandle, uint32_t width, u
         g_Backend = std::make_unique<Endfield::VulkanBackend>();
         g_Backend->Initialize(actualWindowHandle);
         g_Backend->SetupRenderGraph();
-        g_ECS = std::make_unique<Endfield::ECSManager>();
-        
     }
     
     if (!g_ECS) {
@@ -204,7 +202,8 @@ if (g_Backend) {
                         {bounds[i].minBounds[0], bounds[i].minBounds[1], bounds[i].minBounds[2]},
                         {bounds[i].maxBounds[0], bounds[i].maxBounds[1], bounds[i].maxBounds[2]}
                     };
-                    if (frustum.Intersects(aabb)) {
+                    // if (frustum.Intersects(aabb)) {
+                    {
                         Endfield::VulkanBackend::InstanceData inst;
                         for (int k = 0; k < 16; ++k) {
                             inst.mvpMatrix[k] = transforms[i].localToWorld[k];
