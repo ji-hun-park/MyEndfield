@@ -795,7 +795,7 @@ void VulkanBackend::CreateGraphicsPipeline()
 
 void VulkanBackend::CreateDescriptorResources()
 {
-    // Descriptor Set Layout
+    // --- 1. Descriptor Set Layout 0: Camera (Pass) ---
     VkDescriptorSetLayoutBinding uboLayoutBinding{};
     uboLayoutBinding.binding = 0;
     uboLayoutBinding.descriptorCount = 1;
@@ -803,60 +803,130 @@ void VulkanBackend::CreateDescriptorResources()
     uboLayoutBinding.pImmutableSamplers = nullptr;
     uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
 
-    VkDescriptorSetLayoutCreateInfo layoutInfo{};
-    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 1;
-    layoutInfo.pBindings = &uboLayoutBinding;
+    VkDescriptorSetLayoutCreateInfo layoutInfo0{};
+    layoutInfo0.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layoutInfo0.bindingCount = 1;
+    layoutInfo0.pBindings = &uboLayoutBinding;
 
-    if (vkCreateDescriptorSetLayout(m_Device, &layoutInfo, nullptr, &m_DescriptorSetLayout) != VK_SUCCESS) {
-        throw std::runtime_error("[VulkanBackend ERROR] Failed to create descriptor set layout!");
+    if (vkCreateDescriptorSetLayout(m_Device, &layoutInfo0, nullptr, &m_DescriptorSetLayout) != VK_SUCCESS) {
+        throw std::runtime_error("[VulkanBackend ERROR] Failed to create descriptor set layout 0!");
     }
 
-    // Uniform Buffer
+    // --- 2. Descriptor Set Layout 1: Material (Dummy for now) ---
+    VkDescriptorSetLayoutCreateInfo layoutInfo1{};
+    layoutInfo1.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layoutInfo1.bindingCount = 0; // Empty for now as simulated
+
+    if (vkCreateDescriptorSetLayout(m_Device, &layoutInfo1, nullptr, &m_DescriptorSetLayout1_Material) != VK_SUCCESS) {
+        throw std::runtime_error("[VulkanBackend ERROR] Failed to create descriptor set layout 1!");
+    }
+
+    // --- 3. Descriptor Set Layout 2: Object Dynamic Offset ---
+    VkDescriptorSetLayoutBinding dynamicLayoutBinding{};
+    dynamicLayoutBinding.binding = 0;
+    dynamicLayoutBinding.descriptorCount = 1;
+    dynamicLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+    dynamicLayoutBinding.pImmutableSamplers = nullptr;
+    dynamicLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+
+    VkDescriptorSetLayoutCreateInfo layoutInfo2{};
+    layoutInfo2.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layoutInfo2.bindingCount = 1;
+    layoutInfo2.pBindings = &dynamicLayoutBinding;
+
+    if (vkCreateDescriptorSetLayout(m_Device, &layoutInfo2, nullptr, &m_DescriptorSetLayout2_Object) != VK_SUCCESS) {
+        throw std::runtime_error("[VulkanBackend ERROR] Failed to create descriptor set layout 2!");
+    }
+
+    // --- Create Buffers ---
+    // Camera Buffer
     CreateBuffer(sizeof(CameraUBO), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, m_CameraUniformBuffer, m_CameraUniformBufferMemory);
     vkMapMemory(m_Device, m_CameraUniformBufferMemory, 0, sizeof(CameraUBO), 0, &m_CameraUniformBufferMapped);
 
-    // Descriptor Pool
-    VkDescriptorPoolSize poolSize{};
-    poolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    poolSize.descriptorCount = 1;
+    // Object Dynamic Buffer
+    VkPhysicalDeviceProperties properties;
+    vkGetPhysicalDeviceProperties(m_PhysicalDevice, &properties);
+    size_t minAlignment = properties.limits.minUniformBufferOffsetAlignment;
+    
+    m_DynamicAlignment = sizeof(InstanceData);
+    if (minAlignment > 0) {
+        m_DynamicAlignment = (m_DynamicAlignment + minAlignment - 1) & ~(minAlignment - 1);
+    }
+    
+    // Allocate space for up to 10000 objects
+    size_t dynamicBufferSize = 10000 * m_DynamicAlignment;
+    CreateBuffer(dynamicBufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, m_ObjectDynamicBuffer, m_ObjectDynamicBufferMemory);
+    vkMapMemory(m_Device, m_ObjectDynamicBufferMemory, 0, dynamicBufferSize, 0, &m_ObjectDynamicBufferMapped);
+
+    // --- Descriptor Pool ---
+    std::vector<VkDescriptorPoolSize> poolSizes = {
+        { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1 }, // Set 0
+        { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1 } // Set 2
+    };
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolInfo.poolSizeCount = 1;
-    poolInfo.pPoolSizes = &poolSize;
-    poolInfo.maxSets = 1;
+    poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
+    poolInfo.pPoolSizes = poolSizes.data();
+    poolInfo.maxSets = 3;
 
     if (vkCreateDescriptorPool(m_Device, &poolInfo, nullptr, &m_DescriptorPool) != VK_SUCCESS) {
         throw std::runtime_error("[VulkanBackend ERROR] Failed to create descriptor pool!");
     }
 
-    // Descriptor Sets
-    VkDescriptorSetAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    allocInfo.descriptorPool = m_DescriptorPool;
-    allocInfo.descriptorSetCount = 1;
-    allocInfo.pSetLayouts = &m_DescriptorSetLayout;
+    // --- Allocate & Update Set 0 ---
+    VkDescriptorSetAllocateInfo allocInfo0{};
+    allocInfo0.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo0.descriptorPool = m_DescriptorPool;
+    allocInfo0.descriptorSetCount = 1;
+    allocInfo0.pSetLayouts = &m_DescriptorSetLayout;
 
-    if (vkAllocateDescriptorSets(m_Device, &allocInfo, &m_DescriptorSet0_Pass) != VK_SUCCESS) {
-        throw std::runtime_error("[VulkanBackend ERROR] Failed to allocate descriptor sets!");
+    if (vkAllocateDescriptorSets(m_Device, &allocInfo0, &m_DescriptorSet0_Pass) != VK_SUCCESS) {
+        throw std::runtime_error("[VulkanBackend ERROR] Failed to allocate descriptor set 0!");
     }
 
-    VkDescriptorBufferInfo bufferInfoDesc{};
-    bufferInfoDesc.buffer = m_CameraUniformBuffer;
-    bufferInfoDesc.offset = 0;
-    bufferInfoDesc.range = sizeof(CameraUBO);
+    VkDescriptorBufferInfo bufferInfoDesc0{};
+    bufferInfoDesc0.buffer = m_CameraUniformBuffer;
+    bufferInfoDesc0.offset = 0;
+    bufferInfoDesc0.range = sizeof(CameraUBO);
 
-    VkWriteDescriptorSet descriptorWrite{};
-    descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    descriptorWrite.dstSet = m_DescriptorSet0_Pass;
-    descriptorWrite.dstBinding = 0;
-    descriptorWrite.dstArrayElement = 0;
-    descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    descriptorWrite.descriptorCount = 1;
-    descriptorWrite.pBufferInfo = &bufferInfoDesc;
+    VkWriteDescriptorSet descriptorWrite0{};
+    descriptorWrite0.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrite0.dstSet = m_DescriptorSet0_Pass;
+    descriptorWrite0.dstBinding = 0;
+    descriptorWrite0.dstArrayElement = 0;
+    descriptorWrite0.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    descriptorWrite0.descriptorCount = 1;
+    descriptorWrite0.pBufferInfo = &bufferInfoDesc0;
 
-    vkUpdateDescriptorSets(m_Device, 1, &descriptorWrite, 0, nullptr);
+    vkUpdateDescriptorSets(m_Device, 1, &descriptorWrite0, 0, nullptr);
+
+    // --- Allocate & Update Set 2 ---
+    VkDescriptorSetAllocateInfo allocInfo2{};
+    allocInfo2.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo2.descriptorPool = m_DescriptorPool;
+    allocInfo2.descriptorSetCount = 1;
+    allocInfo2.pSetLayouts = &m_DescriptorSetLayout2_Object;
+
+    if (vkAllocateDescriptorSets(m_Device, &allocInfo2, &m_DescriptorSet2_Object) != VK_SUCCESS) {
+        throw std::runtime_error("[VulkanBackend ERROR] Failed to allocate descriptor set 2!");
+    }
+
+    VkDescriptorBufferInfo bufferInfoDesc2{};
+    bufferInfoDesc2.buffer = m_ObjectDynamicBuffer;
+    bufferInfoDesc2.offset = 0;
+    bufferInfoDesc2.range = sizeof(InstanceData); // Must be the size of the block, not the whole buffer
+
+    VkWriteDescriptorSet descriptorWrite2{};
+    descriptorWrite2.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrite2.dstSet = m_DescriptorSet2_Object;
+    descriptorWrite2.dstBinding = 0;
+    descriptorWrite2.dstArrayElement = 0;
+    descriptorWrite2.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+    descriptorWrite2.descriptorCount = 1;
+    descriptorWrite2.pBufferInfo = &bufferInfoDesc2;
+
+    vkUpdateDescriptorSets(m_Device, 1, &descriptorWrite2, 0, nullptr);
 }
 
 void VulkanBackend::CreateSyncObjects()
@@ -928,9 +998,25 @@ void VulkanBackend::Shutdown()
             vkFreeMemory(m_Device, m_CameraUniformBufferMemory, nullptr);
             m_CameraUniformBufferMemory = VK_NULL_HANDLE;
         }
+        if (m_ObjectDynamicBuffer) {
+            vkDestroyBuffer(m_Device, m_ObjectDynamicBuffer, nullptr);
+            m_ObjectDynamicBuffer = VK_NULL_HANDLE;
+        }
+        if (m_ObjectDynamicBufferMemory) {
+            vkFreeMemory(m_Device, m_ObjectDynamicBufferMemory, nullptr);
+            m_ObjectDynamicBufferMemory = VK_NULL_HANDLE;
+        }
         if (m_DescriptorSetLayout) {
             vkDestroyDescriptorSetLayout(m_Device, m_DescriptorSetLayout, nullptr);
             m_DescriptorSetLayout = VK_NULL_HANDLE;
+        }
+        if (m_DescriptorSetLayout1_Material) {
+            vkDestroyDescriptorSetLayout(m_Device, m_DescriptorSetLayout1_Material, nullptr);
+            m_DescriptorSetLayout1_Material = VK_NULL_HANDLE;
+        }
+        if (m_DescriptorSetLayout2_Object) {
+            vkDestroyDescriptorSetLayout(m_Device, m_DescriptorSetLayout2_Object, nullptr);
+            m_DescriptorSetLayout2_Object = VK_NULL_HANDLE;
         }
         
         // Runtime resources (Meshes)

@@ -13,8 +13,6 @@ static std::unique_ptr<Endfield::ECSManager> g_ECS = nullptr;
 static std::unique_ptr<Endfield::CullingSystem> g_Culling = nullptr;
 static std::mutex g_NativeMutex;
 
-// 멀티스레딩(메인 스레드 vs 렌더 스레드) 충돌 방지용 뮤텍스
-
 #if defined(_WIN32) || defined(_WIN64)
 #include <windows.h>
 #include <thread>
@@ -201,7 +199,6 @@ if (g_Backend) {
                 if (!transforms || !bounds || !meshes) continue;
 
                 // 1. Chunk 단위 병렬 Frustum Culling (배열 형태이므로 캐시 친화적)
-                // 현재는 싱글 스레드 루프지만, 각 청크를 잡 시스템 워커에 할당하여 병렬 처리 가능
                 for (uint32_t i = 0; i < chunk->entityCount; ++i) {
                     Endfield::AABB aabb = { 
                         {bounds[i].minBounds[0], bounds[i].minBounds[1], bounds[i].minBounds[2]},
