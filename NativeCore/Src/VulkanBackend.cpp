@@ -114,9 +114,15 @@ void VulkanBackend::CreateInstance()
     createInfo.enabledLayerCount = 1;
     createInfo.ppEnabledLayerNames = validationLayers;
 
-    // Enable Debug Utils Extension
-    const char* extensions[] = { VK_EXT_DEBUG_UTILS_EXTENSION_NAME };
-    createInfo.enabledExtensionCount = 1;
+    // Enable Debug Utils Extension & Surface Extensions
+    const char* extensions[] = { 
+        VK_EXT_DEBUG_UTILS_EXTENSION_NAME,
+        VK_KHR_SURFACE_EXTENSION_NAME,
+#if defined(_WIN32)
+        "VK_KHR_win32_surface"
+#endif
+    };
+    createInfo.enabledExtensionCount = sizeof(extensions) / sizeof(extensions[0]);
     createInfo.ppEnabledExtensionNames = extensions;
 
     VkDebugUtilsMessengerCreateInfoEXT debugCreateInfo{};
