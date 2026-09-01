@@ -12,6 +12,11 @@ namespace Endfield.NativeInterop
         [DllImport(pluginName)]
         public static extern void InitializeVulkanRenderer(IntPtr windowHandle, uint width, uint height);
 
+        public delegate void DebugCallbackDelegate(string message);
+
+        [DllImport(pluginName)]
+        public static extern void RegisterDebugCallback(DebugCallbackDelegate callback);
+
         [DllImport(pluginName)]
         public static extern void ShutdownVulkanRenderer();
 

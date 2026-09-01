@@ -13,6 +13,12 @@ namespace Endfield.NativeInterop
         class NativeRenderPass : ScriptableRenderPass
         {
             private bool m_Initialized = false;
+            private NativePluginWrapper.DebugCallbackDelegate m_DebugCallback;
+
+            private void DebugLogCallback(string message)
+            {
+                Debug.Log(message);
+            }
 
             class PassData { }
 
@@ -28,6 +34,9 @@ namespace Endfield.NativeInterop
                         {
                             try
                             {
+                                m_DebugCallback = new NativePluginWrapper.DebugCallbackDelegate(DebugLogCallback);
+                                NativePluginWrapper.RegisterDebugCallback(m_DebugCallback);
+
                                 IntPtr hwnd = IntPtr.Zero;
 #if UNITY_EDITOR_WIN || UNITY_STANDALONE_WIN
                                 hwnd = Process.GetCurrentProcess().MainWindowHandle;

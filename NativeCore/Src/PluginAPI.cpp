@@ -111,6 +111,8 @@ ENDFIELD_API void InitializeVulkanRenderer(void* windowHandle, uint32_t width, u
         g_Backend = std::make_unique<Endfield::VulkanBackend>();
         g_Backend->Initialize(actualWindowHandle);
         g_Backend->SetupRenderGraph();
+        g_ECS = std::make_unique<Endfield::ECSManager>();
+        
     }
     
     if (!g_ECS) {
@@ -130,6 +132,11 @@ ENDFIELD_API void InitializeVulkanRenderer(void* windowHandle, uint32_t width, u
         // 하드웨어 동시성(코어 수) 기반으로 멀티스레딩 워커 갯수 자동 초기화
         g_Culling->Initialize(0); 
     }
+}
+
+ENDFIELD_API void RegisterDebugCallback(Endfield::VulkanBackend::DebugLogFunc callback)
+{
+    Endfield::VulkanBackend::SetDebugCallback(callback);
 }
 
 ENDFIELD_API void ShutdownVulkanRenderer()
