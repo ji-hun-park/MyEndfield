@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 #include <thread>
+#include <stdexcept>
 
 namespace Endfield {
 
@@ -50,21 +51,26 @@ VulkanBackend::~VulkanBackend()
 
 void VulkanBackend::Initialize(void* windowHandle)
 {
-    CreateInstance();
-    SetupDebugMessenger();
-    CreateSurface(windowHandle);
-    SelectPhysicalDevice();
-    CreateLogicalDevice();
-    CreateCommandObjects();
-    CreateSwapchain();
-    CreateDepthResources();
-    CreateRenderPass();
-    CreateFramebuffers();
-    CreateDescriptorResources();
-    CreateGraphicsPipeline();
-    CreateSyncObjects();
-
-    LogToUnity("[VulkanBackend] Successfully Initialized Native Vulkan Backend.");
+    try {
+        CreateInstance();
+        SetupDebugMessenger();
+        CreateSurface(windowHandle);
+        SelectPhysicalDevice();
+        CreateLogicalDevice();
+        CreateCommandObjects();
+        CreateSwapchain();
+        CreateDepthResources();
+        CreateRenderPass();
+        CreateFramebuffers();
+        CreateDescriptorResources();
+        CreateGraphicsPipeline();
+        CreateSyncObjects();
+    
+        LogToUnity("[VulkanBackend] Successfully Initialized Native Vulkan Backend.");
+    } catch (const std::exception& e) {
+        LogToUnity(std::string("[VulkanBackend CRITICAL] Initialization aborted: ") + e.what());
+        Shutdown();
+    }
 }
 
 void VulkanBackend::CreateSurface(void* windowHandle)
@@ -78,7 +84,7 @@ void VulkanBackend::CreateSurface(void* windowHandle)
     createInfo.hinstance = GetModuleHandle(nullptr);
 
     if (vkCreateWin32SurfaceKHR(m_Instance, &createInfo, nullptr, &m_Surface) != VK_SUCCESS) {
-        LogToUnity("[VulkanBackend ERROR] Failed to create Win32 Surface!");
+        throw std::runtime_error("[VulkanBackend ERROR] Failed to create Win32 Surface!");
     } else {
         LogToUnity("[VulkanBackend] Win32 Surface successfully created.");
     }
@@ -118,7 +124,7 @@ void VulkanBackend::CreateInstance()
     createInfo.pNext = (VkDebugUtilsMessengerCreateInfoEXT*)&debugCreateInfo;
 
     if (vkCreateInstance(&createInfo, nullptr, &m_Instance) != VK_SUCCESS) {
-        LogToUnity("[VulkanBackend] Failed to create Vulkan instance!");
+        throw std::runtime_error("[VulkanBackend ERROR] Failed to create Vulkan instance!");
     }
 }
 
@@ -137,7 +143,7 @@ void VulkanBackend::SetupDebugMessenger()
         func(m_Instance, &createInfo, nullptr, &m_DebugMessenger);
         LogToUnity("[VulkanBackend] Debug Messenger successfully created.");
     } else {
-        LogToUnity("[VulkanBackend ERROR] Failed to load vkCreateDebugUtilsMessengerEXT function.");
+        throw std::runtime_error("[VulkanBackend ERROR] Failed to load vkCreateDebugUtilsMessengerEXT function.");
     }
 }
 
@@ -206,8 +212,7 @@ void VulkanBackend::SelectPhysicalDevice()
     uint32_t deviceCount = 0;
     vkEnumeratePhysicalDevices(m_Instance, &deviceCount, nullptr);
     if (deviceCount == 0) {
-        LogToUnity("[VulkanBackend ERROR] Failed to find GPUs with Vulkan support!");
-        return;
+        throw std::runtime_error("[VulkanBackend ERROR] Failed to find GPUs with Vulkan support!");
     }
 
     std::vector<VkPhysicalDevice> devices(deviceCount);
@@ -231,7 +236,7 @@ void VulkanBackend::SelectPhysicalDevice()
         vkGetPhysicalDeviceProperties(m_PhysicalDevice, &bestProps);
         LogToUnity("[VulkanBackend] Selected Best GPU: " + std::string(bestProps.deviceName) + " (Score: " + std::to_string(highestScore) + ")");
     } else {
-        LogToUnity("[VulkanBackend ERROR] Failed to find a suitable GPU!");
+        throw std::runtime_error("[VulkanBackend ERROR] Failed to find a suitable GPU!");
     }
 }
 
@@ -297,8 +302,7 @@ void VulkanBackend::CreateLogicalDevice()
     deviceCreateInfo.ppEnabledExtensionNames = deviceExtensions;
 
     if (vkCreateDevice(m_PhysicalDevice, &deviceCreateInfo, nullptr, &m_Device) != VK_SUCCESS) {
-        LogToUnity("[VulkanBackend ERROR] Failed to create logical device!");
-        return;
+        throw std::runtime_error("[VulkanBackend ERROR] Failed to create logical device!");
     }
 
     vkGetDeviceQueue(m_Device, m_GraphicsQueueFamilyIndex, 0, &m_GraphicsQueue);
@@ -315,8 +319,7 @@ void VulkanBackend::CreateCommandObjects()
     poolInfo.queueFamilyIndex = m_GraphicsQueueFamilyIndex;
 
     if (vkCreateCommandPool(m_Device, &poolInfo, nullptr, &m_CommandPool) != VK_SUCCESS) {
-        LogToUnity("[VulkanBackend ERROR] Failed to create command pool!");
-        return;
+        throw std::runtime_error("[VulkanBackend ERROR] Failed to create command pool!");
     }
 
     VkCommandBufferAllocateInfo allocInfo{};
@@ -326,7 +329,7 @@ void VulkanBackend::CreateCommandObjects()
     allocInfo.commandBufferCount = 1;
 
     if (vkAllocateCommandBuffers(m_Device, &allocInfo, &m_CommandBuffer) != VK_SUCCESS) {
-        LogToUnity("[VulkanBackend ERROR] Failed to allocate command buffers!");
+        throw std::runtime_error("[VulkanBackend ERROR] Failed to allocate command buffers!");
     }
 }
 
@@ -378,7 +381,7 @@ void VulkanBackend::CreateSwapchainImageViews() {
         viewInfo.subresourceRange.layerCount = 1;
 
         if (vkCreateImageView(m_Device, &viewInfo, nullptr, &m_SwapchainImageViews[i]) != VK_SUCCESS) {
-            LogToUnity("[VulkanBackend ERROR] Failed to create image views!");
+            throw std::runtime_error("[VulkanBackend ERROR] Failed to create image views!");
         }
     }
 }
@@ -407,8 +410,7 @@ void VulkanBackend::CreateSwapchain()
     }
 
     if (formats.empty() || presentModes.empty()) {
-        LogToUnity("[VulkanBackend ERROR] Inadequate swapchain support!");
-        return;
+        throw std::runtime_error("[VulkanBackend ERROR] Inadequate swapchain support!");
     }
 
     VkSurfaceFormatKHR surfaceFormat = ChooseSwapSurfaceFormat(formats);
@@ -446,8 +448,7 @@ void VulkanBackend::CreateSwapchain()
     createInfo.oldSwapchain = VK_NULL_HANDLE;
 
     if (vkCreateSwapchainKHR(m_Device, &createInfo, nullptr, &m_Swapchain) != VK_SUCCESS) {
-        LogToUnity("[VulkanBackend ERROR] Failed to create swapchain!");
-        return;
+        throw std::runtime_error("[VulkanBackend ERROR] Failed to create swapchain!");
     }
 
     vkGetSwapchainImagesKHR(m_Device, m_Swapchain, &imageCount, nullptr);
@@ -525,7 +526,7 @@ void VulkanBackend::CreateRenderPass()
     renderPassInfo.pDependencies = &dependency;
 
     if (vkCreateRenderPass(m_Device, &renderPassInfo, nullptr, &m_RenderPass) != VK_SUCCESS) {
-        LogToUnity("[VulkanBackend ERROR] Failed to create render pass!");
+        throw std::runtime_error("[VulkanBackend ERROR] Failed to create render pass!");
     } else {
         LogToUnity("[VulkanBackend] Render Pass successfully created.");
     }
@@ -582,8 +583,7 @@ VkShaderModule VulkanBackend::CreateShaderModule(const std::vector<char>& code) 
 
     VkShaderModule shaderModule;
     if (vkCreateShaderModule(m_Device, &createInfo, nullptr, &shaderModule) != VK_SUCCESS) {
-        LogToUnity("[VulkanBackend ERROR] Failed to create shader module!");
-        return VK_NULL_HANDLE;
+        throw std::runtime_error("[VulkanBackend ERROR] Failed to create shader module!");
     }
     return shaderModule;
 }
@@ -717,7 +717,7 @@ void VulkanBackend::CreateGraphicsPipeline()
     pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
 
     if (vkCreatePipelineLayout(m_Device, &pipelineLayoutInfo, nullptr, &m_PipelineLayout) != VK_SUCCESS) {
-        LogToUnity("[VulkanBackend ERROR] Failed to create pipeline layout!");
+        throw std::runtime_error("[VulkanBackend ERROR] Failed to create pipeline layout!");
     }
 
     VkPipelineDepthStencilStateCreateInfo depthStencil{};
@@ -746,7 +746,7 @@ void VulkanBackend::CreateGraphicsPipeline()
     pipelineInfo.basePipelineHandle = VK_NULL_HANDLE;
 
     if (vkCreateGraphicsPipelines(m_Device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_GraphicsPipeline) != VK_SUCCESS) {
-        LogToUnity("[VulkanBackend ERROR] Failed to create graphics pipeline!");
+        throw std::runtime_error("[VulkanBackend ERROR] Failed to create graphics pipeline!");
     } else {
         LogToUnity("[VulkanBackend] Graphics Pipeline successfully created.");
     }
@@ -771,7 +771,7 @@ void VulkanBackend::CreateDescriptorResources()
     layoutInfo.pBindings = &uboLayoutBinding;
 
     if (vkCreateDescriptorSetLayout(m_Device, &layoutInfo, nullptr, &m_DescriptorSetLayout) != VK_SUCCESS) {
-        LogToUnity("[VulkanBackend ERROR] Failed to create descriptor set layout!");
+        throw std::runtime_error("[VulkanBackend ERROR] Failed to create descriptor set layout!");
     }
 
     // Uniform Buffer
@@ -790,7 +790,7 @@ void VulkanBackend::CreateDescriptorResources()
     poolInfo.maxSets = 1;
 
     if (vkCreateDescriptorPool(m_Device, &poolInfo, nullptr, &m_DescriptorPool) != VK_SUCCESS) {
-        LogToUnity("[VulkanBackend ERROR] Failed to create descriptor pool!");
+        throw std::runtime_error("[VulkanBackend ERROR] Failed to create descriptor pool!");
     }
 
     // Descriptor Sets
@@ -801,7 +801,7 @@ void VulkanBackend::CreateDescriptorResources()
     allocInfo.pSetLayouts = &m_DescriptorSetLayout;
 
     if (vkAllocateDescriptorSets(m_Device, &allocInfo, &m_DescriptorSet0_Pass) != VK_SUCCESS) {
-        LogToUnity("[VulkanBackend ERROR] Failed to allocate descriptor sets!");
+        throw std::runtime_error("[VulkanBackend ERROR] Failed to allocate descriptor sets!");
     }
 
     VkDescriptorBufferInfo bufferInfoDesc{};
@@ -835,7 +835,7 @@ void VulkanBackend::CreateSyncObjects()
     if (vkCreateSemaphore(m_Device, &semaphoreInfo, nullptr, &m_ImageAvailableSemaphore) != VK_SUCCESS ||
         vkCreateSemaphore(m_Device, &semaphoreInfo, nullptr, &m_RenderFinishedSemaphore) != VK_SUCCESS ||
         vkCreateFence(m_Device, &fenceInfo, nullptr, &m_InFlightFence) != VK_SUCCESS) {
-        LogToUnity("[VulkanBackend ERROR] Failed to create synchronization objects!");
+        throw std::runtime_error("[VulkanBackend ERROR] Failed to create synchronization objects!");
     } else {
         LogToUnity("[VulkanBackend] Synchronization objects created successfully.");
     }
@@ -1132,8 +1132,7 @@ bool VulkanBackend::BeginFrame()
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 
     if (vkBeginCommandBuffer(m_CommandBuffer, &beginInfo) != VK_SUCCESS) {
-        LogToUnity("[VulkanBackend ERROR] Failed to begin recording command buffer!");
-        return false;
+        throw std::runtime_error("[VulkanBackend ERROR] Failed to begin recording command buffer!");
     }
     
     // 렌더 패스 시작 및 렌더링 명령어는 이제 RenderGraph가 EndFrame 시점에 일괄 처리합니다.
@@ -1332,8 +1331,7 @@ void VulkanBackend::EndFrame()
     m_RenderGraph.Execute(m_CommandBuffer);
 
     if (vkEndCommandBuffer(m_CommandBuffer) != VK_SUCCESS) {
-        LogToUnity("[VulkanBackend ERROR] Failed to record command buffer!");
-        return;
+        throw std::runtime_error("[VulkanBackend ERROR] Failed to record command buffer!");
     }
     
     // Submit command buffer
@@ -1354,8 +1352,7 @@ void VulkanBackend::EndFrame()
     submitInfo.pSignalSemaphores = signalSemaphores;
 
     if (vkQueueSubmit(m_GraphicsQueue, 1, &submitInfo, m_InFlightFence) != VK_SUCCESS) {
-        LogToUnity("[VulkanBackend ERROR] Failed to submit draw command buffer!");
-        return;
+        throw std::runtime_error("[VulkanBackend ERROR] Failed to submit draw command buffer!");
     }
     
     // Present
@@ -1373,7 +1370,7 @@ void VulkanBackend::EndFrame()
     if (presentResult == VK_ERROR_OUT_OF_DATE_KHR || presentResult == VK_SUBOPTIMAL_KHR) {
         RecreateSwapchain();
     } else if (presentResult != VK_SUCCESS) {
-        LogToUnity("[VulkanBackend ERROR] Failed to present swapchain image!");
+        throw std::runtime_error("[VulkanBackend ERROR] Failed to present swapchain image!");
     }
 }
 
@@ -1388,7 +1385,7 @@ VkFormat VulkanBackend::FindSupportedFormat(const std::vector<VkFormat>& candida
             return format;
         }
     }
-    LogToUnity("[VulkanBackend ERROR] Failed to find supported format!");
+    throw std::runtime_error("[VulkanBackend ERROR] Failed to find supported format!");
     return VK_FORMAT_D32_SFLOAT;
 }
 
@@ -1409,7 +1406,7 @@ uint32_t VulkanBackend::FindMemoryType(uint32_t typeFilter, VkMemoryPropertyFlag
             return i;
         }
     }
-    LogToUnity("[VulkanBackend ERROR] Failed to find suitable memory type!");
+    throw std::runtime_error("[VulkanBackend ERROR] Failed to find suitable memory type!");
     return 0;
 }
 
@@ -1433,8 +1430,7 @@ void VulkanBackend::CreateDepthResources() {
     imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
     if (vkCreateImage(m_Device, &imageInfo, nullptr, &m_DepthImage) != VK_SUCCESS) {
-        LogToUnity("[VulkanBackend ERROR] Failed to create depth image!");
-        return;
+        throw std::runtime_error("[VulkanBackend ERROR] Failed to create depth image!");
     }
 
     VkMemoryRequirements memRequirements;
@@ -1446,8 +1442,7 @@ void VulkanBackend::CreateDepthResources() {
     allocInfo.memoryTypeIndex = FindMemoryType(memRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
     if (vkAllocateMemory(m_Device, &allocInfo, nullptr, &m_DepthImageMemory) != VK_SUCCESS) {
-        LogToUnity("[VulkanBackend ERROR] Failed to allocate depth image memory!");
-        return;
+        throw std::runtime_error("[VulkanBackend ERROR] Failed to allocate depth image memory!");
     }
 
     vkBindImageMemory(m_Device, m_DepthImage, m_DepthImageMemory, 0);
@@ -1464,7 +1459,7 @@ void VulkanBackend::CreateDepthResources() {
     viewInfo.subresourceRange.layerCount = 1;
 
     if (vkCreateImageView(m_Device, &viewInfo, nullptr, &m_DepthImageView) != VK_SUCCESS) {
-        LogToUnity("[VulkanBackend ERROR] Failed to create depth image view!");
+        throw std::runtime_error("[VulkanBackend ERROR] Failed to create depth image view!");
     }
 }
 
@@ -1481,7 +1476,7 @@ void VulkanBackend::CreateBuffer(VkDeviceSize size, VkBufferUsageFlags usage, Vk
     bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
     if (vkCreateBuffer(m_Device, &bufferInfo, nullptr, &buffer) != VK_SUCCESS) {
-        LogToUnity("[VulkanBackend ERROR] Failed to create buffer!");
+        throw std::runtime_error("[VulkanBackend ERROR] Failed to create buffer!");
     }
 
     VkMemoryRequirements memRequirements;
@@ -1493,7 +1488,7 @@ void VulkanBackend::CreateBuffer(VkDeviceSize size, VkBufferUsageFlags usage, Vk
     allocInfo.memoryTypeIndex = FindMemoryType(memRequirements.memoryTypeBits, properties);
 
     if (vkAllocateMemory(m_Device, &allocInfo, nullptr, &bufferMemory) != VK_SUCCESS) {
-        LogToUnity("[VulkanBackend ERROR] Failed to allocate buffer memory!");
+        throw std::runtime_error("[VulkanBackend ERROR] Failed to allocate buffer memory!");
     }
 
     vkBindBufferMemory(m_Device, buffer, bufferMemory, 0);
