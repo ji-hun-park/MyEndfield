@@ -6,6 +6,7 @@
 #include <thread>
 #include <future>
 #include <iostream>
+#include <limits>
 
 namespace Endfield {
 
@@ -183,10 +184,10 @@ void CullingSystem::RasterizeTilesParallel(float screenWidth, float screenHeight
     // 버퍼 초기화 (Reversed Z 가정: 0.0f가 가장 먼 곳)
     std::fill(m_DepthBuffer.begin(), m_DepthBuffer.end(), 0.0f);
 
-    const int NUM_WORKERS = 4;
-    const int NUM_TILES = 8;
-    const int TILE_COLS = 4;
-    const int TILE_ROWS = 2;
+    const int NUM_WORKERS = m_NumWorkers;
+    constexpr int NUM_TILES = 8;
+    constexpr int TILE_COLS = 4;
+    constexpr int TILE_ROWS = 2;
     const float tileW = static_cast<float>(DEPTH_RES_X) / TILE_COLS;
     const float tileH = static_cast<float>(DEPTH_RES_Y) / TILE_ROWS;
     
@@ -363,9 +364,11 @@ void CullingSystem::PerformOcclusionTestParallel(const float* vpMatrix, const fl
                 }
             }
             
-            float minX = 1e9f, maxX = -1e9f;
-            float minY = 1e9f, maxY = -1e9f;
-            float instanceNearestZ = -1e9f; // Reversed Z: 1.0이 가장 가깝다
+            float minX = std::numeric_limits<float>::max();
+            float maxX = std::numeric_limits<float>::lowest();
+            float minY = std::numeric_limits<float>::max();
+            float maxY = std::numeric_limits<float>::lowest();
+            float instanceNearestZ = std::numeric_limits<float>::lowest(); // Reversed Z: 1.0이 가장 가깝다
 
             bool intersectsNearPlane = false;
 

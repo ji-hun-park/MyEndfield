@@ -206,7 +206,7 @@ ENDFIELD_API void ExecuteNativeRenderLoop()
             
             if (g_ECS && g_Culling) {
                 Endfield::ComponentMask mask;
-                mask.low = 0b1110; // Bit 1(Transform), 2(Bounds), 3(Mesh)
+                mask.low = Endfield::MASK_STANDARD_RENDER;
                 auto chunks = g_ECS->QueryChunks(mask);
                 
                 // ViewProj Matrix 계산
@@ -227,9 +227,9 @@ ENDFIELD_API void ExecuteNativeRenderLoop()
                 std::vector<Endfield::VulkanBackend::InstanceData> visibleInstances;
                 
                 for (auto chunk : chunks) {
-                    auto* transforms = g_ECS->GetComponentArray<Endfield::TransformComponent>(chunk, 1);
-                    auto* bounds = g_ECS->GetComponentArray<Endfield::BoundsComponent>(chunk, 2);
-                    auto* meshes = g_ECS->GetComponentArray<Endfield::MeshComponent>(chunk, 3);
+                    auto* transforms = g_ECS->GetComponentArray<Endfield::TransformComponent>(chunk, Endfield::BIT_TRANSFORM);
+                    auto* bounds = g_ECS->GetComponentArray<Endfield::BoundsComponent>(chunk, Endfield::BIT_BOUNDS);
+                    auto* meshes = g_ECS->GetComponentArray<Endfield::MeshComponent>(chunk, Endfield::BIT_MESH);
                     
                     if (!transforms || !bounds || !meshes) continue;
 
@@ -332,7 +332,7 @@ ENDFIELD_API void SpawnNativeInstances(int count, float spread)
     if (!g_ECS) return;
 
     Endfield::ComponentMask mask;
-    mask.low = 0b1110; // Bit 1(Transform), 2(Bounds), 3(Mesh)
+    mask.low = Endfield::MASK_STANDARD_RENDER;
     auto chunks = g_ECS->QueryChunks(mask);
     
     // 복제할 원본 데이터를 임시로 저장
@@ -344,9 +344,9 @@ ENDFIELD_API void SpawnNativeInstances(int count, float spread)
     std::vector<TemplateData> templates;
 
     for (auto chunk : chunks) {
-        auto* transforms = g_ECS->GetComponentArray<Endfield::TransformComponent>(chunk, 1);
-        auto* bounds = g_ECS->GetComponentArray<Endfield::BoundsComponent>(chunk, 2);
-        auto* meshes = g_ECS->GetComponentArray<Endfield::MeshComponent>(chunk, 3);
+        auto* transforms = g_ECS->GetComponentArray<Endfield::TransformComponent>(chunk, Endfield::BIT_TRANSFORM);
+        auto* bounds = g_ECS->GetComponentArray<Endfield::BoundsComponent>(chunk, Endfield::BIT_BOUNDS);
+        auto* meshes = g_ECS->GetComponentArray<Endfield::MeshComponent>(chunk, Endfield::BIT_MESH);
         
         if (transforms && bounds && meshes) {
             for (uint32_t i = 0; i < chunk->entityCount; ++i) {

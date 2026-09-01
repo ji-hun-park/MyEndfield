@@ -24,6 +24,18 @@ struct ComponentMask {
     }
 };
 
+enum ComponentBitIndex : uint32_t {
+    BIT_TRANSFORM = 1,
+    BIT_BOUNDS = 2,
+    BIT_MESH = 3
+};
+
+constexpr uint64_t MASK_TRANSFORM = 1ULL << BIT_TRANSFORM;
+constexpr uint64_t MASK_BOUNDS = 1ULL << BIT_BOUNDS;
+constexpr uint64_t MASK_MESH = 1ULL << BIT_MESH;
+
+constexpr uint64_t MASK_STANDARD_RENDER = MASK_TRANSFORM | MASK_BOUNDS | MASK_MESH;
+
 // 렌더링에 사용되는 핵심 데이터 컴포넌트 구조체 (SoA 메모리 매핑용)
 struct TransformComponent {
     float localToWorld[16];

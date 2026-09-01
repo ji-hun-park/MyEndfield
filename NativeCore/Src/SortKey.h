@@ -27,10 +27,13 @@ struct SortKey {
     }
 };
 
+constexpr float DEFAULT_MAX_SORT_DISTANCE = 1000.0f;
+constexpr uint16_t MAX_DEPTH_VAL = 0xFFFF;
+
 class SortKeyBuilder {
 public:
     // 불투명(Opaque) 오브젝트용 키 생성: Front-to-Back 정렬 (가까운 것이 먼저)
-    static SortKey CreateOpaque(uint16_t passID, uint16_t pipelineID, uint16_t materialID, float distance, float maxDistance = 1000.0f) {
+    static SortKey CreateOpaque(uint16_t passID, uint16_t pipelineID, uint16_t materialID, float distance, float maxDistance = DEFAULT_MAX_SORT_DISTANCE) {
         SortKey key;
         key.passID = passID;
         key.pipelineID = pipelineID;
@@ -38,12 +41,12 @@ public:
         
         // 거리가 가까울수록 값이 작아지도록 매핑 (0 ~ 0xFFFF)
         float normalizedDepth = std::clamp(distance / maxDistance, 0.0f, 1.0f);
-        key.depth = static_cast<uint16_t>(normalizedDepth * 0xFFFF);
+        key.depth = static_cast<uint16_t>(normalizedDepth * MAX_DEPTH_VAL);
         return key;
     }
 
     // 반투명(Transparent) 오브젝트용 키 생성: Back-to-Front 정렬 (먼 것이 먼저)
-    static SortKey CreateTransparent(uint16_t passID, uint16_t pipelineID, uint16_t materialID, float distance, float maxDistance = 1000.0f) {
+    static SortKey CreateTransparent(uint16_t passID, uint16_t pipelineID, uint16_t materialID, float distance, float maxDistance = DEFAULT_MAX_SORT_DISTANCE) {
         SortKey key;
         key.passID = passID;
         key.pipelineID = pipelineID;
@@ -52,8 +55,8 @@ public:
         // 반투명은 멀리 있는 것(큰 distance)이 먼저 그려져야 하므로, 값을 반전(Invert)시킵니다.
         // 역순 정렬을 위해 0xFFFF에서 빼줌 (값이 작을수록 먼저 그려짐 -> 역전되어 먼 것이 먼저 그려짐)
         float normalizedDepth = std::clamp(distance / maxDistance, 0.0f, 1.0f);
-        uint16_t depthVal = static_cast<uint16_t>(normalizedDepth * 0xFFFF);
-        key.depth = 0xFFFF - depthVal; 
+        uint16_t depthVal = static_cast<uint16_t>(normalizedDepth * MAX_DEPTH_VAL);
+        key.depth = MAX_DEPTH_VAL - depthVal; 
         return key;
     }
 };

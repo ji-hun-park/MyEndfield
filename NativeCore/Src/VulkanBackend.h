@@ -115,6 +115,7 @@ private:
     VkCommandPool m_CommandPool = VK_NULL_HANDLE;
     
     static const int MAX_FRAMES_IN_FLIGHT = 2;
+    static const uint32_t MAX_DYNAMIC_OBJECTS = 200000;
     uint32_t m_CurrentFrame = 0;
     std::vector<VkCommandBuffer> m_CommandBuffers;
     
@@ -166,7 +167,7 @@ private:
     VkBuffer m_ObjectDynamicBuffer = VK_NULL_HANDLE;
     VkDeviceMemory m_ObjectDynamicBufferMemory = VK_NULL_HANDLE;
     void* m_ObjectDynamicBufferMapped = nullptr;
-    size_t m_DynamicAlignment = 256;
+    size_t m_DynamicAlignment = 0;
 
     std::vector<VkDescriptorSet> m_MaterialSets;
     uint32_t m_LastBoundMaterialSet = 0xFFFFFFFF;

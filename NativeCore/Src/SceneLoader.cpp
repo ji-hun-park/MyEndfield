@@ -60,7 +60,7 @@ bool SceneLoader::LoadScene(const std::string& filePath, ECSManager& ecsManager,
     VulkanBackend::LogToUnity("[SceneLoader] Loading " + std::to_string(objectCount) + " objects from scene...");
 
     ComponentMask mask;
-    mask.low = 0b1110; // Bit 1(Transform), 2(Bounds), 3(Mesh)
+    mask.low = Endfield::MASK_STANDARD_RENDER;
     for (uint32_t i = 0; i < objectCount; i++) {
         TransformComponent transform;
         file.read(reinterpret_cast<char*>(transform.localToWorld), sizeof(float) * 16);

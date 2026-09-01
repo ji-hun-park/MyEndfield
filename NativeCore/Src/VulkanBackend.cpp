@@ -159,12 +159,16 @@ void VulkanBackend::SetupDebugMessenger()
 
 int VulkanBackend::ScoreDeviceSuitability(VkPhysicalDevice device)
 {
+    constexpr int SCORE_DISCRETE_GPU = 5000;
+    constexpr int SCORE_QUEUE_SUPPORT = 500;
+    constexpr int SCORE_SWAPCHAIN_SUPPORT = 500;
+
     int score = 0;
     VkPhysicalDeviceProperties deviceProperties;
     vkGetPhysicalDeviceProperties(device, &deviceProperties);
     
     if (deviceProperties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
-        score += 5000;
+        score += SCORE_DISCRETE_GPU;
     }
 
     uint32_t queueFamilyCount = 0;
@@ -191,8 +195,8 @@ int VulkanBackend::ScoreDeviceSuitability(VkPhysicalDevice device)
         }
     }
 
-    if (hasGraphicsQueue) score += 500;
-    if (hasPresentQueue) score += 500;
+    if (hasGraphicsQueue) score += SCORE_QUEUE_SUPPORT;
+    if (hasPresentQueue) score += SCORE_QUEUE_SUPPORT;
 
     uint32_t extensionCount;
     vkEnumerateDeviceExtensionProperties(device, nullptr, &extensionCount, nullptr);
@@ -208,7 +212,7 @@ int VulkanBackend::ScoreDeviceSuitability(VkPhysicalDevice device)
     }
     
     if (swapchainSupported) {
-        score += 500;
+        score += SCORE_SWAPCHAIN_SUPPORT;
     }
 
     LogToUnity("[VulkanBackend] GPU Found: " + std::string(deviceProperties.deviceName) + " (Score: " + std::to_string(score) + ")");
@@ -362,11 +366,14 @@ VkPresentModeKHR VulkanBackend::ChooseSwapPresentMode(const std::vector<VkPresen
     return VK_PRESENT_MODE_FIFO_KHR;
 }
 
+constexpr uint32_t DEFAULT_WINDOW_WIDTH = 1280;
+constexpr uint32_t DEFAULT_WINDOW_HEIGHT = 720;
+
 VkExtent2D VulkanBackend::ChooseSwapExtent(const VkSurfaceCapabilitiesKHR& capabilities) {
     if (capabilities.currentExtent.width != UINT32_MAX) {
         return capabilities.currentExtent;
     } else {
-        VkExtent2D extent = { 1280, 720 }; 
+        VkExtent2D extent = { DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT }; 
         extent.width = std::clamp(extent.width, capabilities.minImageExtent.width, capabilities.maxImageExtent.width);
         extent.height = std::clamp(extent.height, capabilities.minImageExtent.height, capabilities.maxImageExtent.height);
         return extent;
@@ -850,8 +857,7 @@ void VulkanBackend::CreateDescriptorResources()
         m_DynamicAlignment = (m_DynamicAlignment + minAlignment - 1) & ~(minAlignment - 1);
     }
     
-    // Allocate space for up to 200000 objects
-    uint32_t MAX_DYNAMIC_OBJECTS = 200000;
+    // Allocate space for up to MAX_DYNAMIC_OBJECTS objects
     size_t dynamicBufferSize = MAX_DYNAMIC_OBJECTS * m_DynamicAlignment;
     CreateBuffer(dynamicBufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, m_ObjectDynamicBuffer, m_ObjectDynamicBufferMemory);
     vkMapMemory(m_Device, m_ObjectDynamicBufferMemory, 0, dynamicBufferSize, 0, &m_ObjectDynamicBufferMapped);
@@ -1306,8 +1312,8 @@ void VulkanBackend::ExecuteOpaqueDraws(VkCommandBuffer cmdBuffer)
     }
 
     std::vector<OccluderMesh> dummyOccluders;
-    m_CullingSystem.BatchOccluders(dummyOccluders, vp, m_SwapchainExtent.width, m_SwapchainExtent.height);
-    m_CullingSystem.RasterizeTilesParallel(m_SwapchainExtent.width, m_SwapchainExtent.height);
+    m_CullingSystem.BatchOccluders(dummyOccluders, vp, static_cast<float>(m_SwapchainExtent.width), static_cast<float>(m_SwapchainExtent.height));
+    m_CullingSystem.RasterizeTilesParallel(static_cast<float>(m_SwapchainExtent.width), static_cast<float>(m_SwapchainExtent.height));
      
     std::vector<bool> visibilityResults;
     visibilityResults.resize(instanceCount, true); // BYPASS occlusion culling
@@ -1356,9 +1362,9 @@ void VulkanBackend::ExecuteOpaqueDraws(VkCommandBuffer cmdBuffer)
     // 일단 0x7F7F7F7F라는 플레이스홀더를 사용하여 디스크립터 바인딩 예약을 생성합니다.
 
     int visibleCount = static_cast<int>(m_SortedInstances.size());
-    if (visibleCount > 200000) {
-        visibleCount = 200000;
-        LogToUnity("[VulkanBackend WARNING] Too many instances! Truncated to 100,000.");
+    if (visibleCount > MAX_DYNAMIC_OBJECTS) {
+        visibleCount = MAX_DYNAMIC_OBJECTS;
+        LogToUnity("[VulkanBackend WARNING] Too many instances! Truncated to " + std::to_string(MAX_DYNAMIC_OBJECTS) + ".");
     }
     
     if (m_IntermediateCmds.size() < static_cast<size_t>(visibleCount)) {
@@ -1698,8 +1704,8 @@ void VulkanBackend::UploadMesh(const std::vector<Vertex>& vertices, const std::v
         combinedIndices.insert(combinedIndices.end(), sm.begin(), sm.end());
     }
 
-    VkDeviceSize vertexBufferSize = sizeof(vertices[0]) * vertices.size();
-    VkDeviceSize indexBufferSize = sizeof(combinedIndices[0]) * combinedIndices.size();
+    VkDeviceSize vertexBufferSize = sizeof(Vertex) * vertices.size();
+    VkDeviceSize indexBufferSize = sizeof(int32_t) * combinedIndices.size();
 
     VkBuffer stagingBuffer;
     VkDeviceMemory stagingBufferMemory;
@@ -1730,10 +1736,10 @@ void VulkanBackend::UploadMesh(const std::vector<Vertex>& vertices, const std::v
     vkFreeMemory(m_Device, stagingBufferMemory, nullptr);
 }
 
-} // namespace Endfield
-
-void Endfield::VulkanBackend::WaitDeviceIdle() {
+void VulkanBackend::WaitDeviceIdle() {
     if (m_Device) {
         vkDeviceWaitIdle(m_Device);
     }
 }
+
+} // namespace Endfield
