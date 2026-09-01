@@ -151,14 +151,22 @@ private:
     float m_ProjMatrix[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
 
     struct IntermediateDrawCmd {
-        uint32_t descriptorSetPlaceholder; // 0x7F7F7F7F (더미 마커)
+        uint32_t descriptorSetPlaceholder; // 0x7F7F7F7F
         uint32_t materialID;
         uint32_t meshId;
         uint32_t subMeshIdx;
         InstanceData data;
     };
 
+    VkDescriptorSetLayout m_DescriptorSetLayout1_Material = VK_NULL_HANDLE;
+    VkDescriptorSetLayout m_DescriptorSetLayout2_Object = VK_NULL_HANDLE;
     VkDescriptorSet m_DescriptorSet2_Object = VK_NULL_HANDLE;
+
+    VkBuffer m_ObjectDynamicBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory m_ObjectDynamicBufferMemory = VK_NULL_HANDLE;
+    void* m_ObjectDynamicBufferMapped = nullptr;
+    size_t m_DynamicAlignment = 256;
+
     std::vector<VkDescriptorSet> m_MaterialSets;
     uint32_t m_LastBoundMaterialSet = 0xFFFFFFFF;
     std::vector<InstanceData> m_PendingBatchData;

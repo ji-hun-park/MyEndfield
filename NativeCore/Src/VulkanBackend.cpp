@@ -1245,6 +1245,9 @@ void VulkanBackend::ExecuteOpaqueDraws(VkCommandBuffer cmdBuffer)
         }
     }
     
+    // DEBUG LOG: See how many instances survived culling
+    LogToUnity("[VulkanBackend] Total Instances: " + std::to_string(instanceCount) + ", Visible: " + std::to_string(m_SortedInstances.size()));
+    
     std::sort(m_SortedInstances.begin(), m_SortedInstances.end(), [](const InstanceData& a, const InstanceData& b) {
         return a.sortKey < b.sortKey; // SortKey.h에 정의된 64비트 uint64_t(value) 기반 operator< 비교
     });
@@ -1267,22 +1270,25 @@ void VulkanBackend::ExecuteOpaqueDraws(VkCommandBuffer cmdBuffer)
     // 워커는 다른 워커가 어떤 머티리얼을 바인딩했는지 알 수 없으므로,
     // 일단 0x7F7F7F7F라는 플레이스홀더를 사용하여 디스크립터 바인딩 예약을 생성합니다.
 
-    if (m_IntermediateCmds.size() < static_cast<size_t>(instanceCount)) {
-        m_IntermediateCmds.resize(instanceCount);
+    int visibleCount = static_cast<int>(m_SortedInstances.size());
+    if (m_IntermediateCmds.size() < static_cast<size_t>(visibleCount)) {
+        m_IntermediateCmds.resize(visibleCount);
     }
     const uint32_t PLACEHOLDER_BINDING = 0x7F7F7F7F;
 
     unsigned int numThreads = std::thread::hardware_concurrency();
     if (numThreads == 0) numThreads = 4;
-    if (numThreads > static_cast<unsigned int>(instanceCount)) {
-        numThreads = static_cast<unsigned int>(instanceCount);
+    if (numThreads > static_cast<unsigned int>(visibleCount)) {
+        numThreads = static_cast<unsigned int>(visibleCount);
     }
+    
+    if (numThreads == 0) return; // Prevent div by 0 if visibleCount is 0
 
-    int chunkSize = instanceCount / numThreads;
+    int chunkSize = visibleCount / numThreads;
 
     for (unsigned int t = 0; t < numThreads; ++t) {
         int startIdx = t * chunkSize;
-        int endIdx = (t == numThreads - 1) ? instanceCount : startIdx + chunkSize;
+        int endIdx = (t == numThreads - 1) ? visibleCount : startIdx + chunkSize;
 
         m_ThreadPool->Enqueue([startIdx, endIdx, sortedInstances, this, PLACEHOLDER_BINDING]() {
             for (int i = startIdx; i < endIdx; ++i) {
@@ -1320,10 +1326,9 @@ void VulkanBackend::ExecuteOpaqueDraws(VkCommandBuffer cmdBuffer)
     scissor.extent = m_SwapchainExtent;
     vkCmdSetScissor(cmdBuffer, 0, 1, &scissor);
 
-    int instanceIndex = 0;
     uint32_t lastBoundMaterialSet = 0xFFFFFFFF; // 매 프레임/드로우콜 배치 시작 시 상태 캐시 리셋!
 
-    for (int i = 0; i < instanceCount; ++i) {
+    for (int i = 0; i < visibleCount; ++i) {
         IntermediateDrawCmd& cmd = m_IntermediateCmds[i];
 
         // 상태 캐싱: 이전 인스턴스와 같은 머티리얼(파이프라인 상태)이라면 바인딩 생략
@@ -1341,28 +1346,12 @@ void VulkanBackend::ExecuteOpaqueDraws(VkCommandBuffer cmdBuffer)
                 vkCmdBindDescriptorSets(cmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, 
                                         m_PipelineLayout, 1, 1, &m_MaterialSets[cmd.materialID], 0, nullptr);
             }
-        } else {
-            // 이미 바인딩되어 있으므로 패스 (커맨드 생성 생략)
         }
 
         // --- [3] 실제 Draw Call 기록 ---
-        // Endfield 문서: "Dynamic Offset을 사용하여 버퍼 바인딩 오버헤드 제거"
-        // 유니폼 버퍼(UBO)나 SSBO 배열의 오프셋을 조절해 모델 매트릭스에 접근
-        if (m_PipelineLayout != VK_NULL_HANDLE && m_DescriptorSet2_Object != VK_NULL_HANDLE) {
-            // 참고: 실제 Vulkan 구현에서는 디바이스의 minUniformBufferOffsetAlignment 값에 맞춰 
-            // 오프셋 보정(Alignment)이 필요하지만, 여기서는 구조적 이해를 위해 기본 크기 단위 오프셋을 보여줍니다.
-            uint32_t dynamicOffset = static_cast<uint32_t>(instanceIndex * sizeof(InstanceData));
-            
-            vkCmdBindDescriptorSets(
-                cmdBuffer, 
-                VK_PIPELINE_BIND_POINT_GRAPHICS, 
-                m_PipelineLayout, 
-                2, // Set 2: Object Data
-                1, 
-                &m_DescriptorSet2_Object, 
-                1, 
-                &dynamicOffset
-            );
+        // 셰이더가 layout(push_constant)를 사용하므로 push constants 바인딩
+        if (m_PipelineLayout != VK_NULL_HANDLE) {
+            vkCmdPushConstants(cmdBuffer, m_PipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(InstanceData), &cmd.data);
         }
 
         if (cmd.meshId < m_Meshes.size()) {
@@ -1377,8 +1366,6 @@ void VulkanBackend::ExecuteOpaqueDraws(VkCommandBuffer cmdBuffer)
                 vkCmdDrawIndexed(cmdBuffer, subMesh.indexCount, 1, subMesh.firstIndex, 0, 0);
             }
         }
-        
-        instanceIndex++;
     }
 }
 
