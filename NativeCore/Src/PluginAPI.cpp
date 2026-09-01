@@ -164,69 +164,74 @@ static float g_ProjMatrix[16];
 ENDFIELD_API void ExecuteNativeRenderLoop()
 {
     std::lock_guard<std::mutex> lock(g_NativeMutex);
-if (g_Backend) {
-        if (g_Backend->BeginFrame()) {
-        
-        if (g_ECS && g_Culling) {
-            Endfield::ComponentMask mask;
-            mask.low = 0b1110; // Bit 1(Transform), 2(Bounds), 3(Mesh)
-            auto chunks = g_ECS->QueryChunks(mask);
+    try {
+        if (g_Backend) {
+            if (g_Backend->BeginFrame()) {
             
-            // ViewProj Matrix 계산
-            float vp[16];
-            for (int c = 0; c < 4; ++c) {
-                for (int r = 0; r < 4; ++r) {
-                    vp[c * 4 + r] = 0;
-                    for (int k = 0; k < 4; ++k) {
-                        vp[c * 4 + r] += g_ProjMatrix[k * 4 + r] * g_ViewMatrix[c * 4 + k];
-                    }
-                }
-            }
-            
-            Endfield::Frustum frustum;
-            frustum.ExtractFromMatrix(vp);
-
-            // ECS의 SoA 청크 메모리를 직접 참조하여 컬링 및 인스턴스 배열 조립
-            std::vector<Endfield::VulkanBackend::InstanceData> visibleInstances;
-            
-            for (auto chunk : chunks) {
-                auto* transforms = g_ECS->GetComponentArray<Endfield::TransformComponent>(chunk, 1);
-                auto* bounds = g_ECS->GetComponentArray<Endfield::BoundsComponent>(chunk, 2);
-                auto* meshes = g_ECS->GetComponentArray<Endfield::MeshComponent>(chunk, 3);
+            if (g_ECS && g_Culling) {
+                Endfield::ComponentMask mask;
+                mask.low = 0b1110; // Bit 1(Transform), 2(Bounds), 3(Mesh)
+                auto chunks = g_ECS->QueryChunks(mask);
                 
-                if (!transforms || !bounds || !meshes) continue;
-
-                // 1. Chunk 단위 병렬 Frustum Culling (배열 형태이므로 캐시 친화적)
-                for (uint32_t i = 0; i < chunk->entityCount; ++i) {
-                    Endfield::AABB aabb = { 
-                        {bounds[i].minBounds[0], bounds[i].minBounds[1], bounds[i].minBounds[2]},
-                        {bounds[i].maxBounds[0], bounds[i].maxBounds[1], bounds[i].maxBounds[2]}
-                    };
-                    // if (frustum.Intersects(aabb)) {
-                    {
-                        Endfield::VulkanBackend::InstanceData inst;
-                        for (int k = 0; k < 16; ++k) {
-                            inst.mvpMatrix[k] = transforms[i].localToWorld[k];
+                // ViewProj Matrix 계산
+                float vp[16];
+                for (int c = 0; c < 4; ++c) {
+                    for (int r = 0; r < 4; ++r) {
+                        vp[c * 4 + r] = 0;
+                        for (int k = 0; k < 4; ++k) {
+                            vp[c * 4 + r] += g_ProjMatrix[k * 4 + r] * g_ViewMatrix[c * 4 + k];
                         }
-                        inst.sortKey.value = 0;
-                        inst.sortKey.materialID = static_cast<uint16_t>(meshes[i].materialId);
-                        inst.sortKey.pipelineID = static_cast<uint16_t>(meshes[i].meshId);
-                        inst.sortKey.depth = 0;
-                        inst.subMeshIndex = static_cast<uint32_t>(meshes[i].subMeshIndex);
-                        
-                        visibleInstances.push_back(inst);
                     }
                 }
-            }
+                
+                Endfield::Frustum frustum;
+                frustum.ExtractFromMatrix(vp);
 
-            if (!visibleInstances.empty()) {
-                // 그래픽스 커맨드 버퍼에 Draw Call 제출
-                g_Backend->SubmitBatch(visibleInstances.data(), static_cast<int>(visibleInstances.size()));
-            }
-        } // close if (g_ECS && g_Culling)
+                // ECS의 SoA 청크 메모리를 직접 참조하여 컬링 및 인스턴스 배열 조립
+                std::vector<Endfield::VulkanBackend::InstanceData> visibleInstances;
+                
+                for (auto chunk : chunks) {
+                    auto* transforms = g_ECS->GetComponentArray<Endfield::TransformComponent>(chunk, 1);
+                    auto* bounds = g_ECS->GetComponentArray<Endfield::BoundsComponent>(chunk, 2);
+                    auto* meshes = g_ECS->GetComponentArray<Endfield::MeshComponent>(chunk, 3);
+                    
+                    if (!transforms || !bounds || !meshes) continue;
 
-        g_Backend->EndFrame();
+                    // 1. Chunk 내 뷰 프러스텀 컬링 (배열 기반이므로 캐시 친화적)
+                    for (uint32_t i = 0; i < chunk->entityCount; ++i) {
+                        Endfield::AABB aabb = { 
+                            {bounds[i].minBounds[0], bounds[i].minBounds[1], bounds[i].minBounds[2]},
+                            {bounds[i].maxBounds[0], bounds[i].maxBounds[1], bounds[i].maxBounds[2]}
+                        };
+                        // if (frustum.Intersects(aabb)) {
+                        {
+                            Endfield::VulkanBackend::InstanceData inst;
+                            for (int k = 0; k < 16; ++k) {
+                                inst.mvpMatrix[k] = transforms[i].localToWorld[k];
+                            }
+                            inst.sortKey.value = 0;
+                            inst.sortKey.materialID = static_cast<uint16_t>(meshes[i].materialId);
+                            inst.sortKey.pipelineID = static_cast<uint16_t>(meshes[i].meshId);
+                            inst.sortKey.depth = 0;
+                            inst.subMeshIndex = static_cast<uint32_t>(meshes[i].subMeshIndex);
+                            
+                            visibleInstances.push_back(inst);
+                        }
+                    }
+                }
+
+                if (!visibleInstances.empty()) {
+                    // 그래프의 커맨드 큐에 Draw Call 등록
+                    g_Backend->SubmitBatch(visibleInstances.data(), static_cast<int>(visibleInstances.size()));
+                }
+            } // close if (g_ECS && g_Culling)
+
+            g_Backend->EndFrame();
+            }
         }
+    } catch (const std::exception& e) {
+        std::cerr << "[PluginAPI Exception] " << e.what() << std::endl;
+        Endfield::VulkanBackend::LogToUnity(std::string("[NativeRenderLoop Exception] ") + e.what());
     }
 }
 
