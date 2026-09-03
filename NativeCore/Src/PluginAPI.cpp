@@ -7,6 +7,7 @@
 #include <iostream>
 #include <cstdlib>
 #include <mutex>
+#include <cmath>
 
 static std::unique_ptr<Endfield::VulkanBackend> g_Backend = nullptr;
 static std::unique_ptr<Endfield::ECSManager> g_ECS = nullptr;
@@ -326,6 +327,8 @@ if (g_ECS && path != nullptr && g_Backend) {
     }
 }
 
+static uint32_t g_SpawnTemplateSize = 1;
+
 ENDFIELD_API void SpawnNativeInstances(int count, float spread)
 {
     std::lock_guard<std::mutex> lock(g_NativeMutex);
@@ -356,6 +359,7 @@ ENDFIELD_API void SpawnNativeInstances(int count, float spread)
     }
 
     if (templates.empty()) return;
+    g_SpawnTemplateSize = static_cast<uint32_t>(templates.size());
 
     for (int i = 0; i < count; ++i) {
         float offsetX = ((float)rand() / RAND_MAX) * spread - (spread * 0.5f);
@@ -378,6 +382,44 @@ ENDFIELD_API void SpawnNativeInstances(int count, float spread)
             g_ECS->SetComponentData(ent, 1, newT);
             g_ECS->SetComponentData(ent, 2, newB);
             g_ECS->SetComponentData(ent, 3, tpl.m);
+        }
+    }
+}
+
+ENDFIELD_API void AnimateNativeInstances(float time, float deltaTime)
+{
+    std::lock_guard<std::mutex> lock(g_NativeMutex);
+    if (!g_ECS) return;
+
+    Endfield::ComponentMask mask;
+    mask.low = Endfield::MASK_STANDARD_RENDER;
+    auto chunks = g_ECS->QueryChunks(mask);
+
+    for (auto chunk : chunks) {
+        auto* transforms = g_ECS->GetComponentArray<Endfield::TransformComponent>(chunk, Endfield::BIT_TRANSFORM);
+        auto* bounds = g_ECS->GetComponentArray<Endfield::BoundsComponent>(chunk, Endfield::BIT_BOUNDS);
+        
+        if (transforms && bounds) {
+            for (uint32_t i = 0; i < chunk->entityCount; ++i) {
+                // 엔티티 ID를 템플릿 개수(서브매시 개수)로 나누어 같은 캐릭터(그룹)인지 판별
+                uint32_t entityId = chunk->entityArray[i].id;
+                uint32_t groupId = entityId / g_SpawnTemplateSize;
+
+                // 같은 그룹은 동일한 phaseOffset을 가짐 -> 찢어지지 않고 통째로 움직임
+                float phaseOffset = static_cast<float>(groupId) * 0.1f;
+                
+                // y = A * sin(time + phase)
+                // dy = A * cos(time + phase) * dt
+                float amplitude = 2.0f;
+                float deltaY = amplitude * cosf(time + phaseOffset) * deltaTime;
+
+                // Unity Transform Matrix: Translation은 인덱스 12, 13, 14에 저장됩니다. (x, y, z)
+                transforms[i].localToWorld[13] += deltaY;
+
+                // Bounds(AABB)도 동일하게 이동시켜 프러스텀 컬링이 정상 동작하게 합니다.
+                bounds[i].minBounds[1] += deltaY;
+                bounds[i].maxBounds[1] += deltaY;
+            }
         }
     }
 }

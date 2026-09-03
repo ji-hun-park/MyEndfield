@@ -34,5 +34,8 @@ namespace Endfield.NativeInterop
 
         [DllImport(pluginName)]
         public static extern void SpawnNativeInstances(int count, float spread);
+
+        [DllImport(pluginName)]
+        public static extern void AnimateNativeInstances(float time, float deltaTime);
     }
 }

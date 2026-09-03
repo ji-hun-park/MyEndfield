@@ -29,4 +29,7 @@ extern "C" {
 
     // 런타임에 FBX 인스턴스를 무작위 위치로 대량 복제 (성능 테스트용 스포너)
     ENDFIELD_API void SpawnNativeInstances(int count, float spread);
+
+    // 네이티브 인스턴스들의 애니메이션 (일관된 움직임) 적용
+    ENDFIELD_API void AnimateNativeInstances(float time, float deltaTime);
 }
