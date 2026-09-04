@@ -1,4 +1,7 @@
 using UnityEngine;
+#if ENABLE_INPUT_SYSTEM
+using UnityEngine.InputSystem;
+#endif
 
 namespace Endfield.NativeInterop
 {
@@ -29,10 +32,28 @@ namespace Endfield.NativeInterop
 
         private void Update()
         {
-            if (Input.GetKeyDown(m_ToggleKey) || Input.GetKeyDown(m_AlternateToggleKey))
+#if ENABLE_INPUT_SYSTEM
+            var keyboard = Keyboard.current;
+            if (keyboard != null)
             {
-                m_ShowHUD = !m_ShowHUD;
+                if (keyboard.f1Key.wasPressedThisFrame || keyboard.bKey.wasPressedThisFrame)
+                {
+                    m_ShowHUD = !m_ShowHUD;
+                }
             }
+#elif ENABLE_LEGACY_INPUT_MANAGER
+            try
+            {
+                if (Input.GetKeyDown(m_ToggleKey) || Input.GetKeyDown(m_AlternateToggleKey))
+                {
+                    m_ShowHUD = !m_ShowHUD;
+                }
+            }
+            catch (System.InvalidOperationException)
+            {
+                // Fallback when legacy input is disabled
+            }
+#endif
         }
 
         private void InitializeStyles()
@@ -91,7 +112,26 @@ namespace Endfield.NativeInterop
 
         private void OnGUI()
         {
-            if (!m_ShowHUD) return;
+            Event e = Event.current;
+            if (e != null && e.isKey && e.type == EventType.KeyDown)
+            {
+                if (e.keyCode == m_ToggleKey || e.keyCode == m_AlternateToggleKey)
+                {
+                    m_ShowHUD = !m_ShowHUD;
+                    e.Use();
+                }
+            }
+
+            if (!m_ShowHUD)
+            {
+                InitializeStyles();
+                if (GUI.Button(new Rect(15, 15, 190, 26), $"Show Benchmark ({m_ToggleKey}/{m_AlternateToggleKey})", m_ButtonStyle))
+                {
+                    m_ShowHUD = true;
+                }
+                return;
+            }
+
             InitializeStyles();
 
             float panelWidth = 360f;
@@ -103,7 +143,14 @@ namespace Endfield.NativeInterop
             GUILayout.BeginArea(new Rect(panelRect.x + 12, panelRect.y + 10, panelRect.width - 24, panelRect.height - 20));
 
             // Title Header
+            GUILayout.BeginHorizontal();
             GUILayout.Label("ARKKNIGHTS: ENDFIELD BENCHMARK", m_HeaderStyle);
+            if (GUILayout.Button("X", m_ButtonStyle, GUILayout.Width(24), GUILayout.Height(20)))
+            {
+                m_ShowHUD = false;
+            }
+            GUILayout.EndHorizontal();
+
             GUILayout.Label($"Press [{m_ToggleKey}] or [{m_AlternateToggleKey}] to toggle HUD", m_LabelStyle);
             GUILayout.Space(6);
 
