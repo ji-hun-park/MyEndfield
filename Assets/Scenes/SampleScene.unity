@@ -461,8 +461,10 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 1f599be6e47cac343bbbe132750af761, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Endfield.Runtime::Endfield.NativeInterop.NativeSpawner
-  spawnCount: 1000
-  spreadRadius: 500
+  spawnCount: 10000
+  spreadRadius: 5000
+  animateObjects: 1
+  animationSpeed: 1
 --- !u!4 &1342038784
 Transform:
   m_ObjectHideFlags: 0
