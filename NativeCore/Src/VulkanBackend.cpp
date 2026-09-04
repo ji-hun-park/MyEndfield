@@ -1,5 +1,6 @@
 #include "VulkanBackend.h"
 #include "RenderGraph.h"
+#include "Benchmark.h"
 #include <algorithm>
 #include <cstdint>
 #include <fstream>
@@ -1297,6 +1298,8 @@ void VulkanBackend::ExecuteOpaqueDraws(VkCommandBuffer cmdBuffer)
     int instanceCount = static_cast<int>(m_PendingBatchData.size());
     const InstanceData* instances = m_PendingBatchData.data();
 
+    auto& benchmarkStats = BenchmarkManager::Instance().GetCurrentFrameStats();
+
     // --- [-1] 소프트웨어 오클루전 컬링 (Software Occlusion Culling) ---
     // 컬링을 가장 먼저 수행하여 화면에 보이지 않는 오브젝트를 제거합니다.
     
@@ -1311,19 +1314,15 @@ void VulkanBackend::ExecuteOpaqueDraws(VkCommandBuffer cmdBuffer)
         }
     }
 
-    std::vector<OccluderMesh> dummyOccluders;
-    m_CullingSystem.BatchOccluders(dummyOccluders, vp, static_cast<float>(m_SwapchainExtent.width), static_cast<float>(m_SwapchainExtent.height));
-    m_CullingSystem.RasterizeTilesParallel(static_cast<float>(m_SwapchainExtent.width), static_cast<float>(m_SwapchainExtent.height));
-     
     std::vector<bool> visibilityResults;
-    visibilityResults.resize(instanceCount, true); // BYPASS occlusion culling
-    // AABB defaultLocalBounds = { {-1, -1, -1}, {1, 1, 1} };
+    visibilityResults.resize(instanceCount, true); // BYPASS occlusion culling by default
     
-    // Note: instances[0].mvpMatrix is actually the MODEL matrix because of push constant layout
-    // m_CullingSystem.PerformOcclusionTestParallel(
-    //     vp, reinterpret_cast<const float*>(instances), instanceCount, sizeof(InstanceData), 
-    //     defaultLocalBounds, m_SwapchainExtent.width, m_SwapchainExtent.height, visibilityResults
-    // );
+    if (BenchmarkManager::Instance().IsOcclusionCullingEnabled()) {
+        ScopedTimer timer(&benchmarkStats.occlusionCullingTimeMs);
+        std::vector<OccluderMesh> dummyOccluders;
+        m_CullingSystem.BatchOccluders(dummyOccluders, vp, static_cast<float>(m_SwapchainExtent.width), static_cast<float>(m_SwapchainExtent.height));
+        m_CullingSystem.RasterizeTilesParallel(static_cast<float>(m_SwapchainExtent.width), static_cast<float>(m_SwapchainExtent.height));
+    }
 
     // --- [0] 64비트 정렬 키 기반의 오브젝트 정렬 (Sorting) ---
     // Endfield 문서: "정렬 비교는 16바이트짜리 값에 대한 분기 비교이며, 표준 정렬(std::sort)을 그대로 사용합니다."
@@ -1336,12 +1335,15 @@ void VulkanBackend::ExecuteOpaqueDraws(VkCommandBuffer cmdBuffer)
         }
     }
     
-    // DEBUG LOG: See how many instances survived culling
-    LogToUnity("[VulkanBackend] Total Instances: " + std::to_string(instanceCount) + ", Visible: " + std::to_string(m_SortedInstances.size()));
-    
-    std::sort(m_SortedInstances.begin(), m_SortedInstances.end(), [](const InstanceData& a, const InstanceData& b) {
-        return a.sortKey < b.sortKey; // SortKey.h에 정의된 64비트 uint64_t(value) 기반 operator< 비교
-    });
+    benchmarkStats.visibleInstances = static_cast<uint32_t>(m_SortedInstances.size());
+    benchmarkStats.culledOcclusion = static_cast<uint32_t>(instanceCount - m_SortedInstances.size());
+
+    {
+        ScopedTimer timer(&benchmarkStats.sortingTimeMs);
+        std::sort(m_SortedInstances.begin(), m_SortedInstances.end(), [](const InstanceData& a, const InstanceData& b) {
+            return a.sortKey < b.sortKey; // SortKey.h에 정의된 64비트 uint64_t(value) 기반 operator< 비교
+        });
+    }
     
     // 이후 로직은 정렬된 배열을 기반으로 진행합니다.
     const InstanceData* sortedInstances = m_SortedInstances.data();
@@ -1382,88 +1384,86 @@ void VulkanBackend::ExecuteOpaqueDraws(VkCommandBuffer cmdBuffer)
 
     int chunkSize = visibleCount / numThreads;
 
-    for (unsigned int t = 0; t < numThreads; ++t) {
-        int startIdx = t * chunkSize;
-        int endIdx = (t == numThreads - 1) ? visibleCount : startIdx + chunkSize;
+    {
+        ScopedTimer timer(&benchmarkStats.batchingTimeMs);
 
-        m_ThreadPool->Enqueue([startIdx, endIdx, sortedInstances, this, PLACEHOLDER_BINDING]() {
-            for (int i = startIdx; i < endIdx; ++i) {
-                const InstanceData& data = sortedInstances[i];
-                IntermediateDrawCmd cmd;
+        for (unsigned int t = 0; t < numThreads; ++t) {
+            int startIdx = t * chunkSize;
+            int endIdx = (t == numThreads - 1) ? visibleCount : startIdx + chunkSize;
+
+            m_ThreadPool->Enqueue([startIdx, endIdx, sortedInstances, this, PLACEHOLDER_BINDING]() {
+                for (int i = startIdx; i < endIdx; ++i) {
+                    const InstanceData& data = sortedInstances[i];
+                    IntermediateDrawCmd cmd;
+                    
+                    cmd.descriptorSetPlaceholder = PLACEHOLDER_BINDING;
+                    cmd.materialID = data.sortKey.materialID;
+                    cmd.meshId = data.sortKey.pipelineID;
+                    cmd.subMeshIdx = data.subMeshIndex;
+                    cmd.data = data;
+                    
+                    this->m_IntermediateCmds[i] = cmd;
+                }
+            });
+        }
+
+        // 워커 스레드가 커맨드 빌드를 모두 마칠 때까지 대기
+        m_ThreadPool->WaitAll();
+
+        // --- [2] 최종 정리(Finalize) 단계 ---
+        // 정렬(Sort)이 완료된 상태에서 순차적으로 커맨드를 순회하며 중복 바인딩을 제거(Skip)합니다.
+
+        VkViewport viewport{};
+        viewport.x = 0.0f;
+        viewport.y = 0.0f;
+        viewport.width = (float)m_SwapchainExtent.width;
+        viewport.height = (float)m_SwapchainExtent.height;
+        viewport.minDepth = 0.0f;
+        viewport.maxDepth = 1.0f;
+        vkCmdSetViewport(cmdBuffer, 0, 1, &viewport);
+
+        VkRect2D scissor{};
+        scissor.offset = {0, 0};
+        scissor.extent = m_SwapchainExtent;
+        vkCmdSetScissor(cmdBuffer, 0, 1, &scissor);
+
+        uint32_t lastBoundMaterialSet = 0xFFFFFFFF; // 매 프레임/드로우콜 배치 시작 시 상태 캐시 리셋!
+
+        for (int i = 0; i < visibleCount; ++i) {
+            IntermediateDrawCmd& cmd = m_IntermediateCmds[i];
+
+            // 상태 캐싱: 이전 인스턴스와 같은 머티리얼(파이프라인 상태)이라면 바인딩 생략
+            if (cmd.materialID != lastBoundMaterialSet) {
+                cmd.descriptorSetPlaceholder = cmd.materialID; // 실제 바인딩 ID로 리졸브(Resolve)
+                lastBoundMaterialSet = cmd.materialID;
                 
-                cmd.descriptorSetPlaceholder = PLACEHOLDER_BINDING;
-                cmd.materialID = data.sortKey.materialID;
-                cmd.meshId = data.sortKey.pipelineID;
-                cmd.subMeshIdx = data.subMeshIndex;
-                cmd.data = data;
-                
-                this->m_IntermediateCmds[i] = cmd;
+                if (cmd.materialID < m_MaterialSets.size() && m_MaterialSets[cmd.materialID] != VK_NULL_HANDLE) {
+                    vkCmdBindDescriptorSets(cmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, 
+                                            m_PipelineLayout, 1, 1, &m_MaterialSets[cmd.materialID], 0, nullptr);
+                }
             }
-        });
-    }
 
-    // 워커 스레드가 커맨드 빌드를 모두 마칠 때까지 대기
-    m_ThreadPool->WaitAll();
+            // --- [3] Copy to Dynamic Uniform Buffer ---
+            // Instead of Push Constants, copy data to mapped buffer and bind descriptor set 2
+            uint32_t dynamicOffset = i * static_cast<uint32_t>(m_DynamicAlignment);
+            memcpy(reinterpret_cast<char*>(m_ObjectDynamicBufferMapped) + dynamicOffset, &cmd.data, sizeof(InstanceData));
 
-    // --- [2] 최종 정리(Finalize) 단계 ---
-    // 정렬(Sort)이 완료된 상태에서 순차적으로 커맨드를 순회하며 중복 바인딩을 제거(Skip)합니다.
-
-    VkViewport viewport{};
-    viewport.x = 0.0f;
-    viewport.y = 0.0f;
-    viewport.width = (float)m_SwapchainExtent.width;
-    viewport.height = (float)m_SwapchainExtent.height;
-    viewport.minDepth = 0.0f;
-    viewport.maxDepth = 1.0f;
-    vkCmdSetViewport(cmdBuffer, 0, 1, &viewport);
-
-    VkRect2D scissor{};
-    scissor.offset = {0, 0};
-    scissor.extent = m_SwapchainExtent;
-    vkCmdSetScissor(cmdBuffer, 0, 1, &scissor);
-
-    uint32_t lastBoundMaterialSet = 0xFFFFFFFF; // 매 프레임/드로우콜 배치 시작 시 상태 캐시 리셋!
-
-    for (int i = 0; i < visibleCount; ++i) {
-        IntermediateDrawCmd& cmd = m_IntermediateCmds[i];
-
-        // 상태 캐싱: 이전 인스턴스와 같은 머티리얼(파이프라인 상태)이라면 바인딩 생략
-        if (cmd.materialID != lastBoundMaterialSet) {
-            cmd.descriptorSetPlaceholder = cmd.materialID; // 실제 바인딩 ID로 리졸브(Resolve)
-            lastBoundMaterialSet = cmd.materialID;
-            
-            // 실제 디스크립터 바인딩 기록
-            // 유니티 플러그인 특성상 미리 바인딩된 Set 1(텍스처/머티리얼 정보)을 사용합니다.
-            // 여기서는 시뮬레이션을 위해 m_MaterialSets 배열을 사용한다고 가정합니다.
-            // 실제 환경에서는 materialID를 인덱스로 삼아 미리 할당된 디스크립터 셋을 바인딩합니다.
-            
-            // 임시로 Set 1(머티리얼) 바인딩 코드 (m_MaterialSets가 세팅되어 있다고 가정)
-            if (cmd.materialID < m_MaterialSets.size() && m_MaterialSets[cmd.materialID] != VK_NULL_HANDLE) {
+            if (m_PipelineLayout != VK_NULL_HANDLE && m_DescriptorSet2_Object != VK_NULL_HANDLE) {
                 vkCmdBindDescriptorSets(cmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, 
-                                        m_PipelineLayout, 1, 1, &m_MaterialSets[cmd.materialID], 0, nullptr);
+                                        m_PipelineLayout, 2, 1, &m_DescriptorSet2_Object, 1, &dynamicOffset);
             }
-        }
 
-        // --- [3] Copy to Dynamic Uniform Buffer ---
-        // Instead of Push Constants, copy data to mapped buffer and bind descriptor set 2
-        uint32_t dynamicOffset = i * static_cast<uint32_t>(m_DynamicAlignment);
-        memcpy(reinterpret_cast<char*>(m_ObjectDynamicBufferMapped) + dynamicOffset, &cmd.data, sizeof(InstanceData));
+            if (cmd.meshId < m_Meshes.size()) {
+                MeshBuffer& mesh = m_Meshes[cmd.meshId];
+                if (mesh.vertexBuffer && mesh.indexBuffer && cmd.subMeshIdx < mesh.subMeshes.size()) {
+                    VkBuffer vertexBuffers[] = {mesh.vertexBuffer};
+                    VkDeviceSize offsets[] = {0};
+                    vkCmdBindVertexBuffers(cmdBuffer, 0, 1, vertexBuffers, offsets);
+                    vkCmdBindIndexBuffer(cmdBuffer, mesh.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
 
-        if (m_PipelineLayout != VK_NULL_HANDLE && m_DescriptorSet2_Object != VK_NULL_HANDLE) {
-            vkCmdBindDescriptorSets(cmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, 
-                                    m_PipelineLayout, 2, 1, &m_DescriptorSet2_Object, 1, &dynamicOffset);
-        }
-
-        if (cmd.meshId < m_Meshes.size()) {
-            MeshBuffer& mesh = m_Meshes[cmd.meshId];
-            if (mesh.vertexBuffer && mesh.indexBuffer && cmd.subMeshIdx < mesh.subMeshes.size()) {
-                VkBuffer vertexBuffers[] = {mesh.vertexBuffer};
-                VkDeviceSize offsets[] = {0};
-                vkCmdBindVertexBuffers(cmdBuffer, 0, 1, vertexBuffers, offsets);
-                vkCmdBindIndexBuffer(cmdBuffer, mesh.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-
-                const SubMeshBuffer& subMesh = mesh.subMeshes[cmd.subMeshIdx];
-                vkCmdDrawIndexed(cmdBuffer, subMesh.indexCount, 1, subMesh.firstIndex, 0, 0);
+                    const SubMeshBuffer& subMesh = mesh.subMeshes[cmd.subMeshIdx];
+                    vkCmdDrawIndexed(cmdBuffer, subMesh.indexCount, 1, subMesh.firstIndex, 0, 0);
+                }
             }
         }
     }
@@ -1499,8 +1499,11 @@ void VulkanBackend::EndFrame()
     submitInfo.signalSemaphoreCount = 1;
     submitInfo.pSignalSemaphores = signalSemaphores;
 
-    if (vkQueueSubmit(m_GraphicsQueue, 1, &submitInfo, m_InFlightFences[m_CurrentFrame]) != VK_SUCCESS) {
-        throw std::runtime_error("[VulkanBackend ERROR] Failed to submit draw command buffer!");
+    {
+        ScopedTimer timer(&BenchmarkManager::Instance().GetCurrentFrameStats().renderSubmitTimeMs);
+        if (vkQueueSubmit(m_GraphicsQueue, 1, &submitInfo, m_InFlightFences[m_CurrentFrame]) != VK_SUCCESS) {
+            throw std::runtime_error("[VulkanBackend ERROR] Failed to submit draw command buffer!");
+        }
     }
     
     // Present

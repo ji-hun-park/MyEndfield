@@ -22,6 +22,9 @@
     <ClCompile Include="D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\Src\ThreadPool.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\Src\Benchmark.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\Src\PluginAPI.h">
@@ -46,6 +49,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\Src\ThreadPool.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\Src\Benchmark.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

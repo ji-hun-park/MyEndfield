@@ -7,6 +7,8 @@
 #define ENDFIELD_API __attribute__((visibility("default")))
 #endif
 
+#include "Benchmark.h"
+
 // 유니티(IUnityInterface 등)에 의존하지 않는 순수 독립형 C API 노출
 extern "C" {
     // 렌더러 초기화 (운영체제 Window Handle이나 Surface 포인터를 직접 받아 Vulkan 초기화)
@@ -32,4 +34,9 @@ extern "C" {
 
     // 네이티브 인스턴스들의 애니메이션 (일관된 움직임) 적용
     ENDFIELD_API void AnimateNativeInstances(float time, float deltaTime);
+
+    // 벤치마크 및 실시간 성능 프로파일링 API
+    ENDFIELD_API void GetLatestBenchmarkStats(Endfield::NativeBenchmarkStats* outStats);
+    ENDFIELD_API void SetBenchmarkCullingOptions(bool enableFrustum, bool enableOcclusion);
+    ENDFIELD_API void RunNativeHeadlessBenchmark(int instanceCount, int iterations, bool enableCulling, Endfield::NativeBenchmarkStats* outAverages);
 }

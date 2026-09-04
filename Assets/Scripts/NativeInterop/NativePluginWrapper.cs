@@ -37,5 +37,34 @@ namespace Endfield.NativeInterop
 
         [DllImport(pluginName)]
         public static extern void AnimateNativeInstances(float time, float deltaTime);
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct NativeBenchmarkStats
+        {
+            public uint totalInstances;
+            public uint visibleInstances;
+            public uint culledFrustum;
+            public uint culledOcclusion;
+            public float ecsQueryTimeMs;
+            public float frustumCullingTimeMs;
+            public float occlusionCullingTimeMs;
+            public float sortingTimeMs;
+            public float batchingTimeMs;
+            public float renderSubmitTimeMs;
+            public float totalNativeFrameTimeMs;
+
+            public float CullingRatio => totalInstances > 0
+                ? (1.0f - ((float)visibleInstances / totalInstances)) * 100.0f
+                : 0.0f;
+        }
+
+        [DllImport(pluginName)]
+        public static extern void GetLatestBenchmarkStats(out NativeBenchmarkStats outStats);
+
+        [DllImport(pluginName)]
+        public static extern void SetBenchmarkCullingOptions(bool enableFrustum, bool enableOcclusion);
+
+        [DllImport(pluginName)]
+        public static extern void RunNativeHeadlessBenchmark(int instanceCount, int iterations, bool enableCulling, out NativeBenchmarkStats outAverages);
     }
 }

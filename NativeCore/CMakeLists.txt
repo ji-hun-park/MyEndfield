@@ -21,6 +21,8 @@ set(SOURCES
     Src/VulkanBackend.cpp
     Src/ThreadPool.h
     Src/ThreadPool.cpp
+    Src/Benchmark.h
+    Src/Benchmark.cpp
 )
 
 # Shared library for Unity Plugin
@@ -62,6 +64,7 @@ enable_testing()
 add_executable(NativeCoreTests
     Tests/ECSTests.cpp
     Tests/CullingTests.cpp
+    Tests/BenchmarkTests.cpp
     Src/ECS.cpp
     Src/Culling.cpp
     Src/VulkanBackend.cpp
@@ -69,6 +72,7 @@ add_executable(NativeCoreTests
     Src/RenderGraph.cpp
     Src/PluginAPI.cpp
     Src/ThreadPool.cpp
+    Src/Benchmark.cpp
 )
 
 target_include_directories(NativeCoreTests PRIVATE 

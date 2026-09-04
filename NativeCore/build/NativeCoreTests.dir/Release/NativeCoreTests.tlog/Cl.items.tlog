@@ -1,5 +1,6 @@
 D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\Tests\ECSTests.cpp;D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\build\NativeCoreTests.dir\Release\ECSTests.obj
 D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\Tests\CullingTests.cpp;D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\build\NativeCoreTests.dir\Release\CullingTests.obj
+D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\Tests\BenchmarkTests.cpp;D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\build\NativeCoreTests.dir\Release\BenchmarkTests.obj
 D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\Src\ECS.cpp;D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\build\NativeCoreTests.dir\Release\ECS.obj
 D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\Src\Culling.cpp;D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\build\NativeCoreTests.dir\Release\Culling.obj
 D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\Src\VulkanBackend.cpp;D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\build\NativeCoreTests.dir\Release\VulkanBackend.obj
@@ -7,3 +8,4 @@ D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\Src\SceneLoader.cpp
 D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\Src\RenderGraph.cpp;D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\build\NativeCoreTests.dir\Release\RenderGraph.obj
 D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\Src\PluginAPI.cpp;D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\build\NativeCoreTests.dir\Release\PluginAPI.obj
 D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\Src\ThreadPool.cpp;D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\build\NativeCoreTests.dir\Release\ThreadPool.obj
+D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\Src\Benchmark.cpp;D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\build\NativeCoreTests.dir\Release\Benchmark.obj

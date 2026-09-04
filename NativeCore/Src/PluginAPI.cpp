@@ -202,13 +202,21 @@ ENDFIELD_API void ExecuteNativeRenderLoop()
             return; // Skip rendering
         }
 #endif
+        Endfield::BenchmarkManager::Instance().BeginFrame();
+
         if (g_Backend) {
             if (g_Backend->BeginFrame()) {
             
             if (g_ECS && g_Culling) {
+                auto& stats = Endfield::BenchmarkManager::Instance().GetCurrentFrameStats();
                 Endfield::ComponentMask mask;
                 mask.low = Endfield::MASK_STANDARD_RENDER;
-                auto chunks = g_ECS->QueryChunks(mask);
+                
+                std::vector<Endfield::Chunk*> chunks;
+                {
+                    Endfield::ScopedTimer timer(&stats.ecsQueryTimeMs);
+                    chunks = g_ECS->QueryChunks(mask);
+                }
                 
                 // ViewProj Matrix 계산
                 float vp[16];
@@ -226,36 +234,54 @@ ENDFIELD_API void ExecuteNativeRenderLoop()
 
                 // ECS의 SoA 청크 메모리를 직접 참조하여 컬링 및 인스턴스 배열 조립
                 std::vector<Endfield::VulkanBackend::InstanceData> visibleInstances;
-                
-                for (auto chunk : chunks) {
-                    auto* transforms = g_ECS->GetComponentArray<Endfield::TransformComponent>(chunk, Endfield::BIT_TRANSFORM);
-                    auto* bounds = g_ECS->GetComponentArray<Endfield::BoundsComponent>(chunk, Endfield::BIT_BOUNDS);
-                    auto* meshes = g_ECS->GetComponentArray<Endfield::MeshComponent>(chunk, Endfield::BIT_MESH);
-                    
-                    if (!transforms || !bounds || !meshes) continue;
+                uint32_t totalEntities = 0;
+                uint32_t culledFrustum = 0;
+                bool enableFrustum = Endfield::BenchmarkManager::Instance().IsFrustumCullingEnabled();
 
-                    // 1. Chunk 내 뷰 프러스텀 컬링 (배열 기반이므로 캐시 친화적)
-                    for (uint32_t i = 0; i < chunk->entityCount; ++i) {
-                        Endfield::AABB aabb = { 
-                            {bounds[i].minBounds[0], bounds[i].minBounds[1], bounds[i].minBounds[2]},
-                            {bounds[i].maxBounds[0], bounds[i].maxBounds[1], bounds[i].maxBounds[2]}
-                        };
-                        // if (frustum.Intersects(aabb)) {
-                        {
-                            Endfield::VulkanBackend::InstanceData inst;
-                            for (int k = 0; k < 16; ++k) {
-                                inst.mvpMatrix[k] = transforms[i].localToWorld[k];
+                {
+                    Endfield::ScopedTimer timer(&stats.frustumCullingTimeMs);
+                    for (auto chunk : chunks) {
+                        auto* transforms = g_ECS->GetComponentArray<Endfield::TransformComponent>(chunk, Endfield::BIT_TRANSFORM);
+                        auto* bounds = g_ECS->GetComponentArray<Endfield::BoundsComponent>(chunk, Endfield::BIT_BOUNDS);
+                        auto* meshes = g_ECS->GetComponentArray<Endfield::MeshComponent>(chunk, Endfield::BIT_MESH);
+                        
+                        if (!transforms || !bounds || !meshes) continue;
+                        totalEntities += chunk->entityCount;
+
+                        // 1. Chunk 내 뷰 프러스텀 컬링 (배열 기반이므로 캐시 친화적)
+                        for (uint32_t i = 0; i < chunk->entityCount; ++i) {
+                            Endfield::AABB aabb = { 
+                                {bounds[i].minBounds[0], bounds[i].minBounds[1], bounds[i].minBounds[2]},
+                                {bounds[i].maxBounds[0], bounds[i].maxBounds[1], bounds[i].maxBounds[2]}
+                            };
+
+                            bool isVisible = true;
+                            if (enableFrustum) {
+                                isVisible = frustum.Intersects(aabb);
                             }
-                            inst.sortKey.value = 0;
-                            inst.sortKey.materialID = static_cast<uint16_t>(meshes[i].materialId);
-                            inst.sortKey.pipelineID = static_cast<uint16_t>(meshes[i].meshId);
-                            inst.sortKey.depth = 0;
-                            inst.subMeshIndex = static_cast<uint32_t>(meshes[i].subMeshIndex);
-                            
-                            visibleInstances.push_back(inst);
+
+                            if (isVisible) {
+                                Endfield::VulkanBackend::InstanceData inst;
+                                for (int k = 0; k < 16; ++k) {
+                                    inst.mvpMatrix[k] = transforms[i].localToWorld[k];
+                                }
+                                inst.sortKey.value = 0;
+                                inst.sortKey.materialID = static_cast<uint16_t>(meshes[i].materialId);
+                                inst.sortKey.pipelineID = static_cast<uint16_t>(meshes[i].meshId);
+                                inst.sortKey.depth = 0;
+                                inst.subMeshIndex = static_cast<uint32_t>(meshes[i].subMeshIndex);
+                                
+                                visibleInstances.push_back(inst);
+                            } else {
+                                culledFrustum++;
+                            }
                         }
                     }
                 }
+
+                stats.totalInstances = totalEntities;
+                stats.culledFrustum = culledFrustum;
+                stats.visibleInstances = static_cast<uint32_t>(visibleInstances.size());
 
                 if (!visibleInstances.empty()) {
                     // 그래프의 커맨드 큐에 Draw Call 등록
@@ -266,10 +292,29 @@ ENDFIELD_API void ExecuteNativeRenderLoop()
             g_Backend->EndFrame();
             }
         }
+        Endfield::BenchmarkManager::Instance().EndFrame();
     } catch (const std::exception& e) {
+        Endfield::BenchmarkManager::Instance().EndFrame();
         std::cerr << "[PluginAPI Exception] " << e.what() << std::endl;
         Endfield::VulkanBackend::LogToUnity(std::string("[NativeRenderLoop Exception] ") + e.what());
     }
+}
+
+ENDFIELD_API void GetLatestBenchmarkStats(Endfield::NativeBenchmarkStats* outStats)
+{
+    if (outStats) {
+        *outStats = Endfield::BenchmarkManager::Instance().GetLatestFrameStats();
+    }
+}
+
+ENDFIELD_API void SetBenchmarkCullingOptions(bool enableFrustum, bool enableOcclusion)
+{
+    Endfield::BenchmarkManager::Instance().SetCullingOptions(enableFrustum, enableOcclusion);
+}
+
+ENDFIELD_API void RunNativeHeadlessBenchmark(int instanceCount, int iterations, bool enableCulling, Endfield::NativeBenchmarkStats* outAverages)
+{
+    Endfield::BenchmarkManager::Instance().RunHeadlessBenchmark(instanceCount, iterations, enableCulling, outAverages);
 }
 
 ENDFIELD_API void RegisterEntity(uint32_t id, float* transformData)

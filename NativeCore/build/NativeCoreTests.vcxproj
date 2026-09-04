@@ -382,6 +382,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
   <ItemGroup>
     <ClCompile Include="D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\Tests\ECSTests.cpp" />
     <ClCompile Include="D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\Tests\CullingTests.cpp" />
+    <ClCompile Include="D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\Tests\BenchmarkTests.cpp" />
     <ClCompile Include="D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\Src\ECS.cpp" />
     <ClCompile Include="D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\Src\Culling.cpp" />
     <ClCompile Include="D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\Src\VulkanBackend.cpp" />
@@ -389,6 +390,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     <ClCompile Include="D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\Src\RenderGraph.cpp" />
     <ClCompile Include="D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\Src\PluginAPI.cpp" />
     <ClCompile Include="D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\Src\ThreadPool.cpp" />
+    <ClCompile Include="D:\ArrFolder\WorkSpaces\UnityWorkSpace\MyEndfield\NativeCore\Src\Benchmark.cpp" />
   </ItemGroup>
   <ItemGroup />
   <ItemGroup>
