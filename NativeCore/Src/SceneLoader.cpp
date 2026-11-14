@@ -4,7 +4,7 @@
 
 namespace Endfield {
 
-bool SceneLoader::LoadScene(const std::string& filePath, ECSManager& ecsManager, std::vector<MeshData>& outMeshes) {
+bool SceneLoader::LoadScene(const std::string& filePath, ECSManager& ecsManager, std::vector<MeshData>& outMeshes, std::vector<TemplateData>& outTemplates) {
     std::ifstream file(filePath, std::ios::binary);
     if (!file.is_open()) {
         VulkanBackend::LogToUnity("[SceneLoader ERROR] Failed to open scene file: " + filePath);
@@ -54,13 +54,12 @@ bool SceneLoader::LoadScene(const std::string& filePath, ECSManager& ecsManager,
         }
     }
 
-    // 3. 오브젝트(인스턴스) 개수 읽기
+    // 3. 오브젝트(템플릿 인스턴스) 데이터 읽기
     uint32_t objectCount = 0;
     file.read(reinterpret_cast<char*>(&objectCount), sizeof(uint32_t));
-    VulkanBackend::LogToUnity("[SceneLoader] Loading " + std::to_string(objectCount) + " objects from scene...");
+    VulkanBackend::LogToUnity("[SceneLoader] Loading " + std::to_string(objectCount) + " template objects from scene...");
 
-    ComponentMask mask;
-    mask.low = Endfield::MASK_STANDARD_RENDER;
+    outTemplates.clear();
     for (uint32_t i = 0; i < objectCount; i++) {
         TransformComponent transform;
         file.read(reinterpret_cast<char*>(transform.localToWorld), sizeof(float) * 16);
@@ -81,13 +80,10 @@ bool SceneLoader::LoadScene(const std::string& filePath, ECSManager& ecsManager,
         meshComp.subMeshIndex = subMeshIndex;
         meshComp.materialId = matId;
 
-        Entity ent = ecsManager.CreateEntity(mask);
-        ecsManager.SetComponentData(ent, 1, transform);
-        ecsManager.SetComponentData(ent, 2, bounds);
-        ecsManager.SetComponentData(ent, 3, meshComp);
+        outTemplates.push_back({transform, bounds, meshComp});
     }
 
-    VulkanBackend::LogToUnity("[SceneLoader] Scene loaded into ECS successfully.");
+    VulkanBackend::LogToUnity("[SceneLoader] Loaded " + std::to_string(outTemplates.size()) + " template objects successfully (deferred spawn).");
     return true;
 }
 

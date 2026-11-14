@@ -18,7 +18,7 @@ struct ComponentMask {
         return low == other.low && high == other.high;
     }
     
-    // this 마스크가 query 마스크를 포함(모두 가짐)하는지 검사
+    // this 마스크가 query 마스크를 포함하는지 검사
     bool Contains(const ComponentMask& query) const {
         return (low & query.low) == query.low && (high & query.high) == query.high;
     }
@@ -109,6 +109,7 @@ public:
 
     Entity CreateEntity(const ComponentMask& mask);
     void DestroyEntity(Entity entity); // Swap-and-pop implementation
+    void Clear(); // Clears all entities and archetypes
 
     // Rule 2: 마스크를 통한 빠른 청크 필터링
     std::vector<Chunk*> QueryChunks(const ComponentMask& queryMask);

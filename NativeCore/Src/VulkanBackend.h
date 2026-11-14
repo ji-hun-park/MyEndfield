@@ -153,7 +153,7 @@ private:
     float m_ProjMatrix[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
 
     struct IntermediateDrawCmd {
-        uint32_t descriptorSetPlaceholder; // 0x7F7F7F7F
+        uint32_t descriptorSetPlaceholder;
         uint32_t materialID;
         uint32_t meshId;
         uint32_t subMeshIdx;

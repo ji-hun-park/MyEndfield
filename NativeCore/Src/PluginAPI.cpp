@@ -346,13 +346,22 @@ ENDFIELD_API void UpdateCameraState(float* viewMatrix, float* projMatrix)
 }
 
 
+struct SpawnTemplateData {
+    Endfield::TransformComponent t;
+    Endfield::BoundsComponent b;
+    Endfield::MeshComponent m;
+};
+static std::vector<SpawnTemplateData> g_SpawnTemplates;
+static uint32_t g_SpawnTemplateSize = 1;
+
 ENDFIELD_API void LoadNativeScene(const char* path)
 {
     std::lock_guard<std::mutex> lock(g_NativeMutex);
-if (g_ECS && path != nullptr && g_Backend) {
+    if (g_ECS && path != nullptr && g_Backend) {
         std::string filePath(path);
         std::vector<Endfield::SceneLoader::MeshData> meshes;
-        if (Endfield::SceneLoader::LoadScene(filePath, *g_ECS, meshes)) {
+        std::vector<Endfield::SceneLoader::TemplateData> templates;
+        if (Endfield::SceneLoader::LoadScene(filePath, *g_ECS, meshes, templates)) {
             for (size_t i = 0; i < meshes.size(); ++i) {
                 // Cast SceneLoader::Vertex to VulkanBackend::Vertex
                 const auto& mesh = meshes[i];
@@ -368,49 +377,53 @@ if (g_ECS && path != nullptr && g_Backend) {
                 }
                 g_Backend->UploadMesh(vkVertices, subMeshIndices, static_cast<uint32_t>(i));
             }
+
+            g_SpawnTemplates.clear();
+            for (const auto& t : templates) {
+                g_SpawnTemplates.push_back({t.transform, t.bounds, t.mesh});
+            }
+            g_SpawnTemplateSize = static_cast<uint32_t>(g_SpawnTemplates.size());
+            Endfield::VulkanBackend::LogToUnity("[PluginAPI] Scene loaded and " + std::to_string(g_SpawnTemplates.size()) + " templates cached for spawning.");
         }
     }
 }
-
-static uint32_t g_SpawnTemplateSize = 1;
 
 ENDFIELD_API void SpawnNativeInstances(int count, float spread)
 {
     std::lock_guard<std::mutex> lock(g_NativeMutex);
     if (!g_ECS) return;
 
-    Endfield::ComponentMask mask;
-    mask.low = Endfield::MASK_STANDARD_RENDER;
-    auto chunks = g_ECS->QueryChunks(mask);
-    
-    // 복제할 원본 데이터를 임시로 저장
-    struct TemplateData {
-        Endfield::TransformComponent t;
-        Endfield::BoundsComponent b;
-        Endfield::MeshComponent m;
-    };
-    std::vector<TemplateData> templates;
-
-    for (auto chunk : chunks) {
-        auto* transforms = g_ECS->GetComponentArray<Endfield::TransformComponent>(chunk, Endfield::BIT_TRANSFORM);
-        auto* bounds = g_ECS->GetComponentArray<Endfield::BoundsComponent>(chunk, Endfield::BIT_BOUNDS);
-        auto* meshes = g_ECS->GetComponentArray<Endfield::MeshComponent>(chunk, Endfield::BIT_MESH);
-        
-        if (transforms && bounds && meshes) {
-            for (uint32_t i = 0; i < chunk->entityCount; ++i) {
-                templates.push_back({transforms[i], bounds[i], meshes[i]});
+    // 만약 g_SpawnTemplates가 비어있다면 (하위 호환) ECS 청크에서 템플릿 추출
+    if (g_SpawnTemplates.empty()) {
+        Endfield::ComponentMask mask;
+        mask.low = Endfield::MASK_STANDARD_RENDER;
+        auto chunks = g_ECS->QueryChunks(mask);
+        for (auto chunk : chunks) {
+            auto* transforms = g_ECS->GetComponentArray<Endfield::TransformComponent>(chunk, Endfield::BIT_TRANSFORM);
+            auto* bounds = g_ECS->GetComponentArray<Endfield::BoundsComponent>(chunk, Endfield::BIT_BOUNDS);
+            auto* meshes = g_ECS->GetComponentArray<Endfield::MeshComponent>(chunk, Endfield::BIT_MESH);
+            if (transforms && bounds && meshes) {
+                for (uint32_t i = 0; i < chunk->entityCount; ++i) {
+                    g_SpawnTemplates.push_back({transforms[i], bounds[i], meshes[i]});
+                }
             }
         }
     }
 
-    if (templates.empty()) return;
-    g_SpawnTemplateSize = static_cast<uint32_t>(templates.size());
+    if (g_SpawnTemplates.empty()) return;
+    g_SpawnTemplateSize = static_cast<uint32_t>(g_SpawnTemplates.size());
+
+    // 정확한 측정을 위해 기존 인스턴스(최초 1개 템플릿 포함)를 모두 정리
+    g_ECS->Clear();
+
+    Endfield::ComponentMask mask;
+    mask.low = Endfield::MASK_STANDARD_RENDER;
 
     for (int i = 0; i < count; ++i) {
         float offsetX = ((float)rand() / RAND_MAX) * spread - (spread * 0.5f);
         float offsetZ = ((float)rand() / RAND_MAX) * spread - (spread * 0.5f);
 
-        for (auto& tpl : templates) {
+        for (auto& tpl : g_SpawnTemplates) {
             Endfield::TransformComponent newT = tpl.t;
             Endfield::BoundsComponent newB = tpl.b;
             
@@ -434,7 +447,7 @@ ENDFIELD_API void SpawnNativeInstances(int count, float spread)
 ENDFIELD_API void AnimateNativeInstances(float time, float deltaTime)
 {
     std::lock_guard<std::mutex> lock(g_NativeMutex);
-    if (!g_ECS) return;
+    if (!g_ECS || g_SpawnTemplateSize == 0) return;
 
     Endfield::ComponentMask mask;
     mask.low = Endfield::MASK_STANDARD_RENDER;

@@ -185,6 +185,12 @@ void ECSManager::DestroyEntity(Entity entity) {
     m_FreeEntityIds.push_back(entity.id);
 }
 
+void ECSManager::Clear() {
+    m_Archetypes.clear();
+    m_EntityRecords.clear();
+    m_FreeEntityIds.clear();
+}
+
 std::vector<Chunk*> ECSManager::QueryChunks(const ComponentMask& queryMask) {
     std::vector<Chunk*> result;
     // 모든 아키타입을 순회하면서 마스크 필터링

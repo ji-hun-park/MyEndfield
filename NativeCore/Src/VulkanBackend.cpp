@@ -70,6 +70,11 @@ void VulkanBackend::Initialize(void* windowHandle)
         CreateDescriptorResources();
         CreateGraphicsPipeline();
         CreateSyncObjects();
+
+        // ThreadPool 주입 및 Vulkan Standard-Z(VK_COMPARE_OP_LESS, Clear 1.0f)에 맞춰 Reversed-Z 비활성화
+        unsigned int workerCount = std::thread::hardware_concurrency();
+        workerCount = (workerCount > 1) ? (workerCount - 1) : 4; // 15 Workers + 1 Main/Render Thread
+        m_CullingSystem.Initialize(workerCount, m_ThreadPool.get(), false);
     
         LogToUnity("[VulkanBackend] Successfully Initialized Native Vulkan Backend.");
     } catch (const std::exception& e) {
@@ -967,6 +972,8 @@ void VulkanBackend::Shutdown()
         
         m_RenderGraph.Clear();
 
+        m_CullingSystem.Shutdown();
+
         // 13. Sync Objects
         for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
             if (m_ImageAvailableSemaphores[i]) {
@@ -1314,35 +1321,35 @@ void VulkanBackend::ExecuteOpaqueDraws(VkCommandBuffer cmdBuffer)
         }
     }
 
-    std::vector<bool> visibilityResults;
-    visibilityResults.resize(instanceCount, true); // BYPASS occlusion culling by default
-    
+    // 오클루전 컬링
+    std::vector<bool> visibilityResults(instanceCount, true);
+
     if (BenchmarkManager::Instance().IsOcclusionCullingEnabled()) {
         ScopedTimer timer(&benchmarkStats.occlusionCullingTimeMs);
-        std::vector<OccluderMesh> dummyOccluders;
-        m_CullingSystem.BatchOccluders(dummyOccluders, vp, static_cast<float>(m_SwapchainExtent.width), static_cast<float>(m_SwapchainExtent.height));
-        m_CullingSystem.RasterizeTilesParallel(static_cast<float>(m_SwapchainExtent.width), static_cast<float>(m_SwapchainExtent.height));
-    }
 
-    // --- [0] 64비트 정렬 키 기반의 오브젝트 정렬 (Sorting) ---
-    // Endfield 문서: "정렬 비교는 16바이트짜리 값에 대한 분기 비교이며, 표준 정렬(std::sort)을 그대로 사용합니다."
-    m_SortedInstances.clear();
-    m_SortedInstances.reserve(instanceCount);
-    for (int i = 0; i < instanceCount; ++i) {
-        // Occlusion Culling을 통과한(보이는) 인스턴스만 렌더 리스트에 등록
-        if (i < visibilityResults.size() && visibilityResults[i]) {
-            m_SortedInstances.push_back(instances[i]);
-        }
-    }
-    
-    benchmarkStats.visibleInstances = static_cast<uint32_t>(m_SortedInstances.size());
-    benchmarkStats.culledOcclusion = static_cast<uint32_t>(instanceCount - m_SortedInstances.size());
+        float screenW = static_cast<float>(m_SwapchainExtent.width);
+        float screenH = static_cast<float>(m_SwapchainExtent.height);
 
-    {
-        ScopedTimer timer(&benchmarkStats.sortingTimeMs);
-        std::sort(m_SortedInstances.begin(), m_SortedInstances.end(), [](const InstanceData& a, const InstanceData& b) {
-            return a.sortKey < b.sortKey; // SortKey.h에 정의된 64비트 uint64_t(value) 기반 operator< 비교
-        });
+        // Phase 1: 오클루더 대리 메시(Proxy Quad) SIMD 배치
+        std::vector<OccluderMesh> proxyOccluders;
+        m_CullingSystem.BatchOccluders(proxyOccluders, vp, screenW, screenH);
+
+        // Phase 2 & 3-A: 4x2 타일 비닝 및 8개 타일 락프리 래스터화
+        m_CullingSystem.RasterizeTilesParallel(screenW, screenH);
+
+        // Phase 3-B: 인스턴스 AABB 화면 투영 및 4-Wide SIMD Hi-Z 깊이 비교
+        // InstanceData::mvpMatrix가 이미 MVP이거나 Model 행렬인 경우에 맞춰 전달
+        AABB defaultCharacterBounds = { {-1.0f, 0.0f, -1.0f}, {1.0f, 2.2f, 1.0f} };
+        m_CullingSystem.PerformOcclusionTestParallel(
+            vp,
+            reinterpret_cast<const float*>(instances),
+            instanceCount,
+            sizeof(InstanceData),
+            defaultCharacterBounds,
+            screenW,
+            screenH,
+            visibilityResults
+        );
     }
     
     // 이후 로직은 정렬된 배열을 기반으로 진행합니다.
