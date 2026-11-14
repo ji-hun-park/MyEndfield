@@ -673,9 +673,7 @@ VkPipelineRasterizationStateCreateInfo VulkanBackend::CreateRasterizationStateIn
     info.polygonMode = VK_POLYGON_MODE_FILL;
     info.lineWidth = 1.0f;
     info.cullMode = VK_CULL_MODE_BACK_BIT;
-    // 투영 행렬 Y축 부호 반전(proj[1][1] *= -1.0f)에 따른 Winding Order 보정
-    // (만약 vert.spv 내부에서 자체 Y반전을 수행하는 경우 VK_FRONT_FACE_CLOCKWISE로 변경)
-    info.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    info.frontFace = VK_FRONT_FACE_CLOCKWISE;
     info.depthBiasEnable = VK_FALSE;
     return info;
 }
@@ -1231,7 +1229,7 @@ void VulkanBackend::UpdateCamera(float* viewMatrix, float* projMatrix)
         std::memcpy(ubo.proj, projMatrix, sizeof(float) * 16);
 
         // Unity(Y-Up) -> Vulkan(Y-Down) 투영 행렬 Y축 부호 반전 (proj[1][1] *= -1.0f)
-        ubo.proj[5] *= -1.0f;
+        // ubo.proj[5] *= -1.0f;
 
         std::memcpy(m_CameraUniformBufferMapped, &ubo, sizeof(CameraUBO));
     }

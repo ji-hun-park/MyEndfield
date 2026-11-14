@@ -24,6 +24,20 @@ namespace Endfield.NativeInterop
 
             public override void RecordRenderGraph(UnityEngine.Rendering.RenderGraphModule.RenderGraph renderGraph, ContextContainer frameData)
             {
+                UniversalCameraData cameraData = frameData.Get<UniversalCameraData>();
+                Camera cam = cameraData.camera;
+
+                // 에디터의 Scene 뷰 카메라나 Preview 카메라가 Game 카메라 행렬을 덮어쓰고
+                // 한 프레임에 여러 번 렌더링을 호출하는 문제를 방지
+                if (Application.isPlaying && cam.cameraType != CameraType.Game)
+                {
+                    return;
+                }
+                if (!Application.isPlaying && cam.cameraType != CameraType.SceneView)
+                {
+                    return;
+                }
+
                 using (var builder = renderGraph.AddUnsafePass<PassData>("Native Render Pass", out var passData))
                 {
                     builder.AllowPassCulling(false);
@@ -61,10 +75,6 @@ namespace Endfield.NativeInterop
 
                             m_Initialized = true;
                         }
-
-                        // CameraData에서 View/Proj 매트릭스 획득
-                        UniversalCameraData cameraData = frameData.Get<UniversalCameraData>();
-                        Camera cam = cameraData.camera;
 
                         Matrix4x4 viewMatrix = cam.worldToCameraMatrix;
                         Matrix4x4 projMatrix = GL.GetGPUProjectionMatrix(cam.projectionMatrix, false);

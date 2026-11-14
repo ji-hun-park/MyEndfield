@@ -115,31 +115,101 @@ struct SpawnTemplateData {
 };
 static std::vector<SpawnTemplateData> g_SpawnTemplates;
 
-// 19개 서브메시 템플릿을 단일 캐릭터 아키타입(InlineSubRendererComponent)으로 병합하는 헬퍼
-static void BuildInlineCharacterTemplate(
-    Endfield::TransformComponent& outTransform,
-    Endfield::BoundsComponent& outCombinedBounds,
-    Endfield::InlineSubRendererComponent& outInlineSub)
+struct InlinePartTemplate {
+    Endfield::TransformComponent t;
+    Endfield::BoundsComponent b;
+    Endfield::InlineSubRendererComponent inlineSub;
+};
+
+// 동일한 meshId를 가진 서브메시 템플릿끼리 묶어 원래의 스케일과 로컬 트랜스폼을 보존
+static std::vector<InlinePartTemplate> BuildInlinePartTemplates()
 {
-    outTransform = g_SpawnTemplates[0].t;
-    outCombinedBounds = g_SpawnTemplates[0].b;
+    std::vector<InlinePartTemplate> parts;
+    for (const auto& tpl : g_SpawnTemplates) {
+        // 같은 meshId와 같은 위치/스케일을 가진 파츠가 이미 있는지 확인
+        InlinePartTemplate* targetPart = nullptr;
+        for (auto& p : parts) {
+            if (p.inlineSub.meshId == tpl.m.meshId &&
+                p.inlineSub.subMeshCount < Endfield::MAX_INLINE_SUB_RENDERERS &&
+                std::memcmp(p.t.localToWorld, tpl.t.localToWorld, sizeof(float) * 16) == 0)
+            {
+                targetPart = &p;
+                break;
+            }
+        }
 
-    outInlineSub = {};
-    outInlineSub.meshId = g_SpawnTemplates[0].m.meshId;
-    uint32_t count = (std::min)(
-        static_cast<uint32_t>(g_SpawnTemplates.size()),
-        Endfield::MAX_INLINE_SUB_RENDERERS
-    );
-    outInlineSub.subMeshCount = count;
+        if (!targetPart) {
+            InlinePartTemplate newPart{};
+            newPart.t = tpl.t;
+            newPart.b = tpl.b;
+            newPart.inlineSub.meshId = tpl.m.meshId;
+            newPart.inlineSub.subMeshCount = 0;
+            parts.push_back(newPart);
+            targetPart = &parts.back();
+        }
 
-    for (uint32_t s = 0; s < count; ++s) {
-        outInlineSub.subMeshIndices[s] = static_cast<uint16_t>(g_SpawnTemplates[s].m.subMeshIndex);
-        outInlineSub.materialIds[s]    = static_cast<uint16_t>(g_SpawnTemplates[s].m.materialId);
+        uint32_t idx = targetPart->inlineSub.subMeshCount++;
+        targetPart->inlineSub.subMeshIndices[idx] = static_cast<uint16_t>(tpl.m.subMeshIndex);
+        targetPart->inlineSub.materialIds[idx]    = static_cast<uint16_t>(tpl.m.materialId);
 
-        // 캐릭터 전체를 감싸는 단일 AABB로 서브메시 바운드 통합
         for (int axis = 0; axis < 3; ++axis) {
-            outCombinedBounds.minBounds[axis] = (std::min)(outCombinedBounds.minBounds[axis], g_SpawnTemplates[s].b.minBounds[axis]);
-            outCombinedBounds.maxBounds[axis] = (std::max)(outCombinedBounds.maxBounds[axis], g_SpawnTemplates[s].b.maxBounds[axis]);
+            targetPart->b.minBounds[axis] = (std::min)(targetPart->b.minBounds[axis], tpl.b.minBounds[axis]);
+            targetPart->b.maxBounds[axis] = (std::max)(targetPart->b.maxBounds[axis], tpl.b.maxBounds[axis]);
+        }
+    }
+    return parts;
+}
+
+ENDFIELD_API void SpawnNativeInstances(int count, float spread)
+{
+    std::lock_guard<std::mutex> lock(g_NativeMutex);
+    if (!g_ECS || count <= 0) return;
+
+    if (g_SpawnTemplates.empty()) {
+        Endfield::ComponentMask mask;
+        mask.low = Endfield::MASK_STANDARD_RENDER;
+        auto chunks = g_ECS->QueryChunks(mask);
+        for (auto chunk : chunks) {
+            auto* transforms = g_ECS->GetComponentArray<Endfield::TransformComponent>(chunk, Endfield::BIT_TRANSFORM);
+            auto* bounds = g_ECS->GetComponentArray<Endfield::BoundsComponent>(chunk, Endfield::BIT_BOUNDS);
+            auto* meshes = g_ECS->GetComponentArray<Endfield::MeshComponent>(chunk, Endfield::BIT_MESH);
+            if (transforms && bounds && meshes) {
+                for (uint32_t i = 0; i < chunk->entityCount; ++i) {
+                    g_SpawnTemplates.push_back({transforms[i], bounds[i], meshes[i]});
+                }
+            }
+        }
+    }
+
+    if (g_SpawnTemplates.empty()) return;
+
+    std::vector<InlinePartTemplate> partTemplates = BuildInlinePartTemplates();
+    g_ECS->Clear();
+
+    Endfield::ComponentMask mask;
+    mask.low = Endfield::MASK_TRANSFORM | Endfield::MASK_BOUNDS | Endfield::MASK_SUB_RENDERERS | Endfield::MASK_VISIBILITY;
+
+    for (int i = 0; i < count; ++i) {
+        // 첫 번째(i == 0) 인스턴스는 카메라 바로 앞 원본 위치(offset = 0)에 배치하여 가까이서 바로 보이도록 함
+        float offsetX = (i == 0) ? 0.0f : (((float)rand() / RAND_MAX) * spread - (spread * 0.5f));
+        float offsetZ = (i == 0) ? 0.0f : (((float)rand() / RAND_MAX) * spread - (spread * 0.5f));
+
+        for (const auto& part : partTemplates) {
+            Endfield::TransformComponent newT = part.t;
+            Endfield::BoundsComponent newB = part.b;
+            
+            newT.localToWorld[12] += offsetX;
+            newT.localToWorld[14] += offsetZ;
+
+            newB.minBounds[0] += offsetX;
+            newB.minBounds[2] += offsetZ;
+            newB.maxBounds[0] += offsetX;
+            newB.maxBounds[2] += offsetZ;
+
+            Endfield::Entity ent = g_ECS->CreateEntity(mask);
+            g_ECS->SetComponentData(ent, Endfield::BIT_TRANSFORM,     newT);
+            g_ECS->SetComponentData(ent, Endfield::BIT_BOUNDS,        newB);
+            g_ECS->SetComponentData(ent, Endfield::BIT_SUB_RENDERERS, part.inlineSub);
         }
     }
 }
@@ -517,63 +587,6 @@ ENDFIELD_API void LoadNativeScene(const char* path)
             }
             Endfield::VulkanBackend::LogToUnity("[PluginAPI] Scene loaded and " + std::to_string(g_SpawnTemplates.size()) + " submesh templates cached into InlineSubRendererComponent.");
         }
-    }
-}
-
-ENDFIELD_API void SpawnNativeInstances(int count, float spread)
-{
-    std::lock_guard<std::mutex> lock(g_NativeMutex);
-    if (!g_ECS || count <= 0) return;
-
-    if (g_SpawnTemplates.empty()) {
-        Endfield::ComponentMask mask;
-        mask.low = Endfield::MASK_STANDARD_RENDER;
-        auto chunks = g_ECS->QueryChunks(mask);
-        for (auto chunk : chunks) {
-            auto* transforms = g_ECS->GetComponentArray<Endfield::TransformComponent>(chunk, Endfield::BIT_TRANSFORM);
-            auto* bounds = g_ECS->GetComponentArray<Endfield::BoundsComponent>(chunk, Endfield::BIT_BOUNDS);
-            auto* meshes = g_ECS->GetComponentArray<Endfield::MeshComponent>(chunk, Endfield::BIT_MESH);
-            if (transforms && bounds && meshes) {
-                for (uint32_t i = 0; i < chunk->entityCount; ++i) {
-                    g_SpawnTemplates.push_back({transforms[i], bounds[i], meshes[i]});
-                }
-            }
-        }
-    }
-
-    if (g_SpawnTemplates.empty()) return;
-
-    // 19개 서브메시 템플릿을 1개의 InlineSubRendererComponent로 병합
-    Endfield::TransformComponent baseTransform{};
-    Endfield::BoundsComponent combinedBounds{};
-    Endfield::InlineSubRendererComponent inlineSub{};
-    BuildInlineCharacterTemplate(baseTransform, combinedBounds, inlineSub);
-
-    g_ECS->Clear();
-
-    // 캐릭터 1개당 1개의 엔티티만 생성하며, 19개 서브메시는 청크 인라인 컬럼(BIT_SUB_RENDERERS)에 수납
-    Endfield::ComponentMask mask;
-    mask.low = Endfield::MASK_TRANSFORM | Endfield::MASK_BOUNDS | Endfield::MASK_SUB_RENDERERS | Endfield::MASK_VISIBILITY;
-
-    for (int i = 0; i < count; ++i) {
-        float offsetX = ((float)rand() / RAND_MAX) * spread - (spread * 0.5f);
-        float offsetZ = ((float)rand() / RAND_MAX) * spread - (spread * 0.5f);
-
-        Endfield::TransformComponent newT = baseTransform;
-        Endfield::BoundsComponent newB = combinedBounds;
-        
-        newT.localToWorld[12] += offsetX;
-        newT.localToWorld[14] += offsetZ;
-
-        newB.minBounds[0] += offsetX;
-        newB.minBounds[2] += offsetZ;
-        newB.maxBounds[0] += offsetX;
-        newB.maxBounds[2] += offsetZ;
-
-        Endfield::Entity ent = g_ECS->CreateEntity(mask);
-        g_ECS->SetComponentData(ent, Endfield::BIT_TRANSFORM,     newT);
-        g_ECS->SetComponentData(ent, Endfield::BIT_BOUNDS,        newB);
-        g_ECS->SetComponentData(ent, Endfield::BIT_SUB_RENDERERS, inlineSub);
     }
 }
 
