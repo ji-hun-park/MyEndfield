@@ -9,6 +9,11 @@ namespace Endfield.NativeInterop
     {
         private const string pluginName = "NativeCore";
 
+        // C# 내부에서 P/Invoke 없이 NativeSpawner -> NativeRenderFeature로 애니메이션 인자를 전달하는 공유 상태
+        public static bool EnableRuntimeAnimation = false;
+        public static float RuntimeAnimTime = 0.0f;
+        public static float RuntimeAnimDeltaTime = 0.0f;
+
         [DllImport(pluginName)]
         public static extern void InitializeVulkanRenderer(IntPtr windowHandle, uint width, uint height);
 
@@ -37,6 +42,16 @@ namespace Endfield.NativeInterop
 
         [DllImport(pluginName)]
         public static extern void AnimateNativeInstances(float time, float deltaTime);
+
+        // [통합 P/Invoke] 매 프레임 4회 호출을 1회로 압축한 단일 진입점
+        [DllImport(pluginName)]
+        public static extern void ExecuteNativeFrameStep(
+            ref Matrix4x4 viewMatrix,
+            ref Matrix4x4 projMatrix,
+            [MarshalAs(UnmanagedType.I1)] bool enableAnimation,
+            float animTime,
+            float animDeltaTime,
+            out NativeBenchmarkStats outStats);
 
         [StructLayout(LayoutKind.Sequential, Pack = 16)]
         public struct InstanceData

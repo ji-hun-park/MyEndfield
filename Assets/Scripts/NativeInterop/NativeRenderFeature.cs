@@ -7,7 +7,7 @@ using Debug = UnityEngine.Debug;
 
 namespace Endfield.NativeInterop
 {
-    // 유니티 렌더링을 가로채서 우리의 독자적 Vulkan 루프를 실행하도록 호출
+    // 유니티 렌더링을 가로채서 독자적 Vulkan 루프를 실행하도록 호출
     public class NativeRenderFeature : ScriptableRendererFeature
     {
         class NativeRenderPass : ScriptableRenderPass
@@ -43,7 +43,7 @@ namespace Endfield.NativeInterop
 #endif
                                 NativePluginWrapper.InitializeVulkanRenderer(hwnd, (uint)Screen.width, (uint)Screen.height);
 
-                                // 에디터에서 익스포트한 씬 바이너리를 네이티브 C++로 즉시 로드
+                                // 에디터에서 익스포트한 씬 바이너리를 네이티브 C++로 즉시 로드 (초기화 시 1회)
                                 string exportPath = Application.dataPath + "/../NativeCore/ExportedScene.bin";
                                 if (!System.IO.File.Exists(exportPath))
                                 {
@@ -71,12 +71,24 @@ namespace Endfield.NativeInterop
 
                         try
                         {
-                            NativePluginWrapper.UpdateCameraState(ref viewMatrix, ref projMatrix);
-                            NativePluginWrapper.ExecuteNativeRenderLoop();
+                            // 카메라 전달 + 애니메이션 + C++ Vulkan 렌더 루프 + 통계 수집을 1회 호출로 수행
+                            NativePluginWrapper.ExecuteNativeFrameStep(
+                                ref viewMatrix,
+                                ref projMatrix,
+                                NativePluginWrapper.EnableRuntimeAnimation,
+                                NativePluginWrapper.RuntimeAnimTime,
+                                NativePluginWrapper.RuntimeAnimDeltaTime,
+                                out var frameStats
+                            );
+
+                            if (BenchmarkManager.Instance != null)
+                            {
+                                BenchmarkManager.Instance.ApplyFrameStats(in frameStats);
+                            }
                         }
                         catch (Exception e)
                         {
-                            Debug.LogError($"[NativeRenderFeature] Exception during native render loop: {e.Message}\n{e.StackTrace}");
+                            Debug.LogError($"[NativeRenderFeature] Exception during native frame step: {e.Message}\n{e.StackTrace}");
                         }
                     });
                 }

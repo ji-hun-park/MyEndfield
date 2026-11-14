@@ -39,4 +39,13 @@ extern "C" {
     ENDFIELD_API void GetLatestBenchmarkStats(Endfield::NativeBenchmarkStats* outStats);
     ENDFIELD_API void SetBenchmarkCullingOptions(bool enableFrustum, bool enableOcclusion);
     ENDFIELD_API void RunNativeHeadlessBenchmark(int instanceCount, int iterations, bool enableCulling, Endfield::NativeBenchmarkStats* outAverages);
+
+    // 카메라 갱신 + 애니메이션 + 네이티브 렌더 루프 + 벤치마크 통계 반환을 단 1회 P/Invoke로 수행
+    ENDFIELD_API void ExecuteNativeFrameStep(
+        float* viewMatrix,
+        float* projMatrix,
+        bool enableAnimation,
+        float animTime,
+        float animDeltaTime,
+        Endfield::NativeBenchmarkStats* outStats);
 }

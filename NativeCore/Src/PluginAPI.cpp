@@ -607,4 +607,31 @@ ENDFIELD_API void AnimateNativeInstances(float time, float deltaTime)
     }
 }
 
+ENDFIELD_API void ExecuteNativeFrameStep(
+    float* viewMatrix,
+    float* projMatrix,
+    bool enableAnimation,
+    float animTime,
+    float animDeltaTime,
+    Endfield::NativeBenchmarkStats* outStats)
+{
+    // 1. 카메라 행렬 업데이트 (P/Invoke #1 통합)
+    if (viewMatrix && projMatrix) {
+        UpdateCameraState(viewMatrix, projMatrix);
+    }
+
+    // 2. 네이티브 ECS 인스턴스 애니메이션 (P/Invoke #2 통합)
+    if (enableAnimation && animDeltaTime > 0.0f) {
+        AnimateNativeInstances(animTime, animDeltaTime);
+    }
+
+    // 3. 네이티브 Vulkan 렌더 루프 실행 (P/Invoke #3 통합)
+    ExecuteNativeRenderLoop();
+
+    // 4. 최신 프레임 벤치마크 통계 즉시 반환 (P/Invoke #4 통합)
+    if (outStats) {
+        *outStats = Endfield::BenchmarkManager::Instance().GetLatestFrameStats();
+    }
+}
+
 } // extern "C"

@@ -28,7 +28,7 @@ namespace Endfield.NativeInterop
 
             try
             {
-                // 로드된 기본 인스턴스들을 C++에서 대량 복제합니다.
+                // 초기화 시 1회 C++에서 대량 복제
                 NativePluginWrapper.SpawnNativeInstances(spawnCount, spreadRadius);
                 Debug.Log($"[NativeSpawner] Successfully spawned {spawnCount} clone instances in native ECS with a spread of {spreadRadius}.");
                 isSpawned = true;
@@ -41,10 +41,24 @@ namespace Endfield.NativeInterop
 
         private void Update()
         {
+            // Update() 내부 P/Invoke 호출 0회: C# 상태 값만 갱신하여 NativeRenderFeature의 단일 호출에 전달
             if (isSpawned && animateObjects)
             {
-                NativePluginWrapper.AnimateNativeInstances(Time.time * animationSpeed, Time.deltaTime * animationSpeed);
+                NativePluginWrapper.EnableRuntimeAnimation = true;
+                NativePluginWrapper.RuntimeAnimTime = Time.time * animationSpeed;
+                NativePluginWrapper.RuntimeAnimDeltaTime = Time.deltaTime * animationSpeed;
             }
+            else
+            {
+                NativePluginWrapper.EnableRuntimeAnimation = false;
+                NativePluginWrapper.RuntimeAnimDeltaTime = 0.0f;
+            }
+        }
+
+        private void OnDisable()
+        {
+            NativePluginWrapper.EnableRuntimeAnimation = false;
+            NativePluginWrapper.RuntimeAnimDeltaTime = 0.0f;
         }
     }
 }

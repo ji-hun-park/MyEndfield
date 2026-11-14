@@ -22,7 +22,7 @@ namespace Endfield.NativeInterop
         public string BenchmarkStatusMessage { get; private set; } = "Idle";
         public float BenchmarkProgress { get; private set; } = 0.0f;
 
-        // Live stats
+        // Live stats (NativeRenderFeature의 단일 ExecuteNativeFrameStep 호출에서 직접 주입됨)
         private NativePluginWrapper.NativeBenchmarkStats m_LatestNativeStats;
         private readonly Queue<float> m_FrameTimeBuffer = new Queue<float>();
         private const int MAX_FRAME_SAMPLES = 60;
@@ -56,6 +56,12 @@ namespace Endfield.NativeInterop
 
         public event Action<string> OnBenchmarkCompleted;
 
+        // NativeRenderFeature가 단일 P/Invoke로 받아온 통계를 추가 마샬링 없이 C#에서 바로 전달
+        public void ApplyFrameStats(in NativePluginWrapper.NativeBenchmarkStats stats)
+        {
+            m_LatestNativeStats = stats;
+        }
+
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
         private static void AutoInitialize()
         {
@@ -85,7 +91,7 @@ namespace Endfield.NativeInterop
 
         private void Update()
         {
-            // 1. Update live Unity FPS & frame times
+            // Update() 내 P/Invoke 호출 0회 (순수 C# FPS 계산만 수행)
             float dt = Time.unscaledDeltaTime;
             if (dt > 0.0001f)
             {
@@ -97,16 +103,6 @@ namespace Endfield.NativeInterop
                 }
 
                 CalculateFpsMetrics();
-            }
-
-            // 2. Poll latest Native C++ stats
-            try
-            {
-                NativePluginWrapper.GetLatestBenchmarkStats(out m_LatestNativeStats);
-            }
-            catch
-            {
-                // Native core might not be initialized yet
             }
         }
 
@@ -180,7 +176,8 @@ namespace Endfield.NativeInterop
                     yield return null;
                     fpsSum += CurrentFps;
 
-                    NativePluginWrapper.GetLatestBenchmarkStats(out var current);
+                    // ExecuteNativeFrameStep이 매 프레임 갱신해 둔 m_LatestNativeStats를 바로 사용 (추가 P/Invoke 0회)
+                    var current = m_LatestNativeStats;
                     accumulatedStats.totalInstances = current.totalInstances;
                     accumulatedStats.visibleInstances += current.visibleInstances;
                     accumulatedStats.culledFrustum += current.culledFrustum;
