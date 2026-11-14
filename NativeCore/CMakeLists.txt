@@ -28,6 +28,16 @@ set(SOURCES
 # Shared library for Unity Plugin
 add_library(NativeCore SHARED ${SOURCES})
 
+set(UNITY_PLUGIN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../Assets/Plugins/x86_64")
+
+add_custom_command(TARGET NativeCore POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${UNITY_PLUGIN_DIR}"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "$<TARGET_FILE:NativeCore>"
+        "${UNITY_PLUGIN_DIR}/NativeCore.dll"
+    COMMENT "[Post-Build] Copying latest NativeCore.dll to Unity Assets/Plugins..."
+)
+
 # Target OS defines
 if (WIN32)
     target_compile_definitions(NativeCore PRIVATE UNITY_WIN=1)
