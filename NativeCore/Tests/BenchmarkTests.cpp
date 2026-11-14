@@ -69,7 +69,7 @@ void RadixSort128_Local(std::vector<SortKey>& keys) {
 } // anonymous namespace
 
 // ============================================================================
-// 1. ECS 128-bit Mask + POPCNT O(1) 컬럼 조회 및 Swap-Erase 검증
+// 1-1. ECS 128-bit Mask + POPCNT O(1) 컬럼 조회 및 Swap-Erase 검증
 // ============================================================================
 TEST(BenchmarkTests, Chapter1_ECS_PopcntLookup_And_SwapErase) {
     ECSManager ecs;
@@ -101,6 +101,42 @@ TEST(BenchmarkTests, Chapter1_ECS_PopcntLookup_And_SwapErase) {
     ASSERT_NE(inlineArr, nullptr);
     EXPECT_EQ(inlineArr[0].subMeshCount, 19u);
     EXPECT_EQ(inlineArr[0].materialIds[18], 18u);
+}
+
+// ============================================================================
+// 1-2. fread/fwrite 기반 Zero-Parsing SoA Chunk Block 직결 로드/저장 검증
+// ============================================================================
+TEST(BenchmarkTests, Chapter1_Trick4_ZeroParsing_Chunk_Fread_Fwrite) {
+    ECSManager srcEcs;
+    ComponentMask mask;
+    mask.low = MASK_TRANSFORM | MASK_BOUNDS | MASK_SUB_RENDERERS | MASK_VISIBILITY;
+
+    for (uint32_t i = 0; i < 100; ++i) {
+        Entity e = srcEcs.CreateEntity(mask);
+        InlineSubRendererComponent sub{};
+        sub.subMeshCount = 19;
+        sub.meshId = 0;
+        sub.materialIds[18] = static_cast<uint16_t>(i + 10);
+        srcEcs.SetComponentData(e, BIT_SUB_RENDERERS, sub);
+    }
+
+    const std::string tempChunkFile = "TestZeroParsingChunks.ecsc";
+    ASSERT_TRUE(srcEcs.SaveChunksBinary(tempChunkFile));
+
+    // 새로운 ECSManager에 개별 엔티티 생성 루프 없이 fread로 청크 컬럼 통째로 복원
+    ECSManager dstEcs;
+    ASSERT_TRUE(dstEcs.LoadChunksBinary(tempChunkFile));
+
+    auto loadedChunks = dstEcs.QueryChunks(mask);
+    ASSERT_EQ(loadedChunks.size(), 1u);
+    EXPECT_EQ(loadedChunks[0]->entityCount, 100u);
+
+    auto* loadedSubArr = dstEcs.GetComponentArray<InlineSubRendererComponent>(loadedChunks[0], BIT_SUB_RENDERERS);
+    ASSERT_NE(loadedSubArr, nullptr);
+    EXPECT_EQ(loadedSubArr[0].subMeshCount, 19u);
+    EXPECT_EQ(loadedSubArr[99].materialIds[18], 109u);
+
+    std::remove(tempChunkFile.c_str());
 }
 
 // ============================================================================

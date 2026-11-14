@@ -1,6 +1,7 @@
 #include "ECS.h"
 #include "VulkanBackend.h"
 #include <cstdlib>
+#include <cstdio>
 #include <cstring>
 #include <iostream>
 
@@ -234,6 +235,138 @@ std::vector<Chunk*> ECSManager::QueryChunks(const ComponentMask& queryMask) {
         }
     }
     return result;
+}
+
+Chunk* ECSManager::AllocateChunkRaw(const ComponentMask& mask, uint32_t count) {
+    if (count == 0 || count > CHUNK_CAPACITY) return nullptr;
+
+    WaitJobFence();
+
+    Archetype* arch = GetOrCreateArchetype(mask);
+    arch->chunks.push_back(std::make_unique<Chunk>(mask));
+    Chunk* chunk = arch->chunks.back().get();
+    chunk->entityCount = count;
+
+    // 청크에 속한 엔티티 핸들(8바이트 Generational Index) 일괄 등록
+    for (uint32_t idx = 0; idx < count; ++idx) {
+        uint32_t id;
+        uint32_t revision = 1;
+        if (!m_FreeEntityIds.empty()) {
+            id = m_FreeEntityIds.back();
+            m_FreeEntityIds.pop_back();
+            revision = m_EntityRecords[id].revision + 1;
+        } else {
+            id = static_cast<uint32_t>(m_EntityRecords.size());
+            m_EntityRecords.emplace_back();
+        }
+
+        Entity ent = { id, revision };
+        chunk->entityArray[idx] = ent;
+        m_EntityRecords[id] = { chunk, idx, revision };
+    }
+
+    return chunk;
+}
+
+bool ECSManager::SaveChunksBinary(const std::string& filePath) const {
+    WaitJobFence();
+
+    std::FILE* fp = std::fopen(filePath.c_str(), "wb");
+    if (!fp) return false;
+
+    // 1. 헤더 기록: 매직 넘버("ECSC") + 유효 청크 총개수
+    const char magic[4] = { 'E', 'C', 'S', 'C' };
+    std::fwrite(magic, sizeof(char), 4, fp);
+
+    uint32_t totalChunks = 0;
+    for (const auto& arch : m_Archetypes) {
+        for (const auto& chunk : arch->chunks) {
+            if (chunk->entityCount > 0) {
+                totalChunks++;
+            }
+        }
+    }
+    std::fwrite(&totalChunks, sizeof(uint32_t), 1, fp);
+
+    // 2. 청크별 메타데이터 및 SoA 컬럼 메모리 블록 통째 덤프 (fwrite)
+    for (const auto& arch : m_Archetypes) {
+        for (const auto& chunk : arch->chunks) {
+            if (chunk->entityCount == 0) continue;
+
+            std::fwrite(&chunk->mask.low,  sizeof(uint64_t), 1, fp);
+            std::fwrite(&chunk->mask.high, sizeof(uint64_t), 1, fp);
+            std::fwrite(&chunk->entityCount, sizeof(uint32_t), 1, fp);
+
+            // 각 SoA 컬럼을 루프 파싱 없이 연속 메모리 블록 단위로 단 1회 fwrite
+            for (size_t c = 0; c < chunk->columns.size(); ++c) {
+                size_t compSize = ComponentRegistry::GetComponentSize(chunk->componentIndices[c]);
+                if (compSize > 0 && chunk->columns[c] != nullptr) {
+                    std::fwrite(chunk->columns[c], compSize, chunk->entityCount, fp);
+                }
+            }
+        }
+    }
+
+    std::fclose(fp);
+    return true;
+}
+
+bool ECSManager::LoadChunksBinary(const std::string& filePath) {
+    WaitJobFence();
+
+    std::FILE* fp = std::fopen(filePath.c_str(), "rb");
+    if (!fp) return false;
+
+    char magic[4] = { 0 };
+    if (std::fread(magic, sizeof(char), 4, fp) != 4 ||
+        magic[0] != 'E' || magic[1] != 'C' || magic[2] != 'S' || magic[3] != 'C')
+    {
+        std::fclose(fp);
+        return false;
+    }
+
+    uint32_t totalChunks = 0;
+    if (std::fread(&totalChunks, sizeof(uint32_t), 1, fp) != 1) {
+        std::fclose(fp);
+        return false;
+    }
+
+    Clear();
+
+    // 디스크의 바이너리 블록을 64바이트 정렬된 청크 컬럼 메모리로 즉시 fread
+    for (uint32_t i = 0; i < totalChunks; ++i) {
+        ComponentMask mask{};
+        uint32_t entityCount = 0;
+
+        if (std::fread(&mask.low,  sizeof(uint64_t), 1, fp) != 1 ||
+            std::fread(&mask.high, sizeof(uint64_t), 1, fp) != 1 ||
+            std::fread(&entityCount, sizeof(uint32_t), 1, fp) != 1)
+        {
+            std::fclose(fp);
+            return false;
+        }
+
+        Chunk* chunk = AllocateChunkRaw(mask, entityCount);
+        if (!chunk) {
+            std::fclose(fp);
+            return false;
+        }
+
+        for (size_t c = 0; c < chunk->columns.size(); ++c) {
+            size_t compSize = ComponentRegistry::GetComponentSize(chunk->componentIndices[c]);
+            if (compSize > 0 && chunk->columns[c] != nullptr) {
+                size_t readCount = std::fread(chunk->columns[c], compSize, entityCount, fp);
+                if (readCount != entityCount) {
+                    std::fclose(fp);
+                    return false;
+                }
+            }
+        }
+    }
+
+    std::fclose(fp);
+    VulkanBackend::LogToUnity("[ECS] Zero-Parsing binary chunks loaded directly via fread (" + std::to_string(totalChunks) + " chunks).");
+    return true;
 }
 
 } // namespace Endfield

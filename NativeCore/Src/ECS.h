@@ -3,6 +3,7 @@
 #include <vector>
 #include <memory>
 #include <atomic>
+#include <string>
 
 #if defined(_MSC_VER)
 #include <intrin.h> // __popcnt64
@@ -191,6 +192,15 @@ public:
             }
         }
     }
+
+    // 개별 엔티티 생성 루프 없이 count개 분량의 64B 정렬 청크를 즉시 할당
+    Chunk* AllocateChunkRaw(const ComponentMask& mask, uint32_t count);
+
+    // 청크 내부의 모든 SoA 컬럼을 디스크 파일로 단 1회씩 fwrite 직결 덤프
+    bool SaveChunksBinary(const std::string& filePath) const;
+
+    // 디스크의 바이너리 블록을 파싱 없이 청크의 SoA 컬럼 메모리로 1회씩 fread 직결 로드
+    bool LoadChunksBinary(const std::string& filePath);
 
 private:
     std::vector<std::unique_ptr<Archetype>> m_Archetypes;
