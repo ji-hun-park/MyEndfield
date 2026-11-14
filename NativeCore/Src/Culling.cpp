@@ -2,6 +2,7 @@
 #include "Culling.h"
 #include "VulkanBackend.h"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <thread>
 #include <future>
@@ -80,13 +81,37 @@ void Frustum::ExtractFromMatrix(const float* vpMatrix) {
 }
 
 bool Frustum::Intersects(const AABB& aabb) const {
-    for (int i = 0; i < 6; ++i) {
-        float px = (planes[i][0] > 0.0f) ? aabb.maxBounds[0] : aabb.minBounds[0];
-        float py = (planes[i][1] > 0.0f) ? aabb.maxBounds[1] : aabb.minBounds[1];
-        float pz = (planes[i][2] > 0.0f) ? aabb.maxBounds[2] : aabb.minBounds[2];
+    // 4-Wide SSE SIMD Frustum Plane Check (Left, Right, Bottom, Top 동시 판정)
+    alignas(16) float px[4], py[4], pz[4], pd[4];
+    alignas(16) float nx[4], ny[4], nz[4];
 
-        float dot = planes[i][0] * px + planes[i][1] * py + planes[i][2] * pz;
-        if (dot < -planes[i][3]) {
+    for (int i = 0; i < 4; ++i) {
+        nx[i] = planes[i][0];
+        ny[i] = planes[i][1];
+        nz[i] = planes[i][2];
+        pd[i] = planes[i][3];
+        px[i] = (planes[i][0] > 0.0f) ? aabb.maxBounds[0] : aabb.minBounds[0];
+        py[i] = (planes[i][1] > 0.0f) ? aabb.maxBounds[1] : aabb.minBounds[1];
+        pz[i] = (planes[i][2] > 0.0f) ? aabb.maxBounds[2] : aabb.minBounds[2];
+    }
+
+    __m128 vDot = _mm_add_ps(
+        _mm_add_ps(_mm_mul_ps(_mm_load_ps(nx), _mm_load_ps(px)),
+                   _mm_mul_ps(_mm_load_ps(ny), _mm_load_ps(py))),
+        _mm_add_ps(_mm_mul_ps(_mm_load_ps(nz), _mm_load_ps(pz)),
+                   _mm_load_ps(pd))
+    );
+
+    if (_mm_movemask_ps(_mm_cmplt_ps(vDot, _mm_setzero_ps())) != 0) {
+        return false;
+    }
+
+    // 나머지 2개 평면 (Near, Far) 판정
+    for (int i = 4; i < 6; ++i) {
+        float pvx = (planes[i][0] > 0.0f) ? aabb.maxBounds[0] : aabb.minBounds[0];
+        float pvy = (planes[i][1] > 0.0f) ? aabb.maxBounds[1] : aabb.minBounds[1];
+        float pvz = (planes[i][2] > 0.0f) ? aabb.maxBounds[2] : aabb.minBounds[2];
+        if (planes[i][0] * pvx + planes[i][1] * pvy + planes[i][2] * pvz + planes[i][3] < 0.0f) {
             return false;
         }
     }
@@ -103,6 +128,7 @@ void CullingSystem::Initialize(uint32_t numWorkers, ThreadPool* threadPool, bool
 
     float clearDepth = m_UseReversedZ ? 0.0f : 1.0f;
     m_DepthBuffer.assign(DEPTH_RES_X * DEPTH_RES_Y, clearDepth);
+    m_BinningWorkerLists.resize(NUM_BINNING_JOBS);
 
     VulkanBackend::LogToUnity("[CullingSystem] Initialized with " + std::to_string(m_NumWorkers) + " parallel workers.");
 }
@@ -110,6 +136,7 @@ void CullingSystem::Initialize(uint32_t numWorkers, ThreadPool* threadPool, bool
 void CullingSystem::Shutdown() {
     m_DepthBuffer.clear();
     m_ScreenTriangles.clear();
+    m_BinningWorkerLists.clear();
     VulkanBackend::LogToUnity("[CullingSystem] Shutdown.");
 }
 
@@ -149,7 +176,7 @@ void CullingSystem::PerformMultiViewFrustumCullingParallel(
     std::vector<uint32_t>& outVisibilityMasks)
 {
     if (entityAABBs.empty() || viewCount == 0 || !frustums) return;
-    if (viewCount > 32) viewCount = 32; // 최대 32개 뷰 비트마스크
+    if (viewCount > 32) viewCount = 32;
 
     const size_t totalEntities = entityAABBs.size();
     outVisibilityMasks.assign(totalEntities, 0u);
@@ -158,7 +185,7 @@ void CullingSystem::PerformMultiViewFrustumCullingParallel(
     const uint32_t numChunks = static_cast<uint32_t>((totalEntities + batchSize - 1) / batchSize);
     const uint32_t activeWorkers = (std::min)(m_NumWorkers, numChunks);
 
-    // 데이터 흐름을 뒤집은 루프: for (Chunk) -> ChunkAABB 사전 컬링 -> for (Entity) -> Views 비트마스크 기록
+    // 데이터 흐름을 뒤집은 루프: for (Chunk) -> ChunkAABB 사전 컬링 -> for (Entity) -> SIMD Compare with Views
     auto multiViewTask = [&](int workerID) {
         uint32_t chunksPerWorker = numChunks / activeWorkers;
         uint32_t startChunk = workerID * chunksPerWorker;
@@ -233,7 +260,7 @@ void CullingSystem::BatchOccluders(const std::vector<OccluderMesh>& occluders, c
         size_t triCount = mesh.indices.size() / 3;
         size_t t = 0;
 
-        // 4-Wide SSE SIMD 배치 처리 (삼각형 4개씩 원근 분할, 백페이스 컬링, 뷰포트 매핑 동시 수행)
+        // 4-Wide SSE SIMD 배치 처리
         for (; t + 3 < triCount; t += 4) {
             alignas(16) float cx0[4], cy0[4], cz0[4], cw0[4];
             alignas(16) float cx1[4], cy1[4], cz1[4], cw1[4];
@@ -337,6 +364,191 @@ void CullingSystem::BatchOccluders(const std::vector<OccluderMesh>& occluders, c
     }
 }
 
+void CullingSystem::ExecuteBinningJob(int jobID) {
+    if (jobID < 0 || jobID >= NUM_BINNING_JOBS) return;
+
+    const float tileW = static_cast<float>(DEPTH_RES_X) / TILE_COLS;
+    const float tileH = static_cast<float>(DEPTH_RES_Y) / TILE_ROWS;
+
+    size_t totalTris = m_ScreenTriangles.size();
+    size_t chunk = (totalTris + NUM_BINNING_JOBS - 1) / NUM_BINNING_JOBS;
+    size_t start = static_cast<size_t>(jobID) * chunk;
+    size_t end = (std::min)(start + chunk, totalTris);
+
+    for (size_t i = start; i < end; ++i) {
+        const auto& tri = m_ScreenTriangles[i];
+
+        float minX = (std::min)(tri.v0.x, (std::min)(tri.v1.x, tri.v2.x)) * m_CachedScaleX;
+        float maxX = (std::max)(tri.v0.x, (std::max)(tri.v1.x, tri.v2.x)) * m_CachedScaleX;
+        float minY = (std::min)(tri.v0.y, (std::min)(tri.v1.y, tri.v2.y)) * m_CachedScaleY;
+        float maxY = (std::max)(tri.v0.y, (std::max)(tri.v1.y, tri.v2.y)) * m_CachedScaleY;
+
+        if (maxX < 0.0f || minX >= DEPTH_RES_X || maxY < 0.0f || minY >= DEPTH_RES_Y) continue;
+
+        minX = (std::max)(0.0f, minX);
+        minY = (std::max)(0.0f, minY);
+        maxX = (std::min)(static_cast<float>(DEPTH_RES_X - 1), maxX);
+        maxY = (std::min)(static_cast<float>(DEPTH_RES_Y - 1), maxY);
+
+        int startTileX = static_cast<int>(minX / tileW);
+        int endTileX   = static_cast<int>(maxX / tileW);
+        int startTileY = static_cast<int>(minY / tileH);
+        int endTileY   = static_cast<int>(maxY / tileH);
+
+        for (int ty = startTileY; ty <= endTileY; ++ty) {
+            for (int tx = startTileX; tx <= endTileX; ++tx) {
+                int tileIndex = ty * TILE_COLS + tx;
+                if (tileIndex >= 0 && tileIndex < NUM_TILES) {
+                    m_BinningWorkerLists[jobID].tileTriangles[tileIndex].push_back(static_cast<int>(i));
+                }
+            }
+        }
+    }
+}
+
+void CullingSystem::ExecuteTileRasterJob(int tileIdx) {
+    if (tileIdx < 0 || tileIdx >= NUM_TILES) return;
+
+    const float tileW = static_cast<float>(DEPTH_RES_X) / TILE_COLS;
+    const float tileH = static_cast<float>(DEPTH_RES_Y) / TILE_ROWS;
+
+    int tx = tileIdx % TILE_COLS;
+    int ty = tileIdx / TILE_COLS;
+    int tileMinX = static_cast<int>(tx * tileW);
+    int tileMaxX = static_cast<int>((tx + 1) * tileW) - 1;
+    int tileMinY = static_cast<int>(ty * tileH);
+    int tileMaxY = static_cast<int>((ty + 1) * tileH) - 1;
+
+    auto edgeFunc = [](const Vector2& a, const Vector2& b, const Vector2& c) {
+        return (c.x - a.x) * (b.y - a.y) - (c.y - a.y) * (b.x - a.x);
+    };
+
+    for (int jobID = 0; jobID < NUM_BINNING_JOBS; ++jobID) {
+        const auto& tris = m_BinningWorkerLists[jobID].tileTriangles[tileIdx];
+
+        for (int triID : tris) {
+            const auto& tri = m_ScreenTriangles[triID];
+
+            Vector2 v0 = { tri.v0.x * m_CachedScaleX, tri.v0.y * m_CachedScaleY };
+            Vector2 v1 = { tri.v1.x * m_CachedScaleX, tri.v1.y * m_CachedScaleY };
+            Vector2 v2 = { tri.v2.x * m_CachedScaleX, tri.v2.y * m_CachedScaleY };
+
+            int minX = (std::max)(tileMinX, static_cast<int>(std::floor((std::min)(v0.x, (std::min)(v1.x, v2.x)))));
+            int maxX = (std::min)(tileMaxX, static_cast<int>(std::ceil((std::max)(v0.x, (std::max)(v1.x, v2.x)))));
+            int minY = (std::max)(tileMinY, static_cast<int>(std::floor((std::min)(v0.y, (std::min)(v1.y, v2.y)))));
+            int maxY = (std::min)(tileMaxY, static_cast<int>(std::ceil((std::max)(v0.y, (std::max)(v1.y, v2.y)))));
+
+            float area = edgeFunc(v0, v1, v2);
+            if (std::abs(area) < 1e-6f) continue;
+            float invArea = 1.0f / area;
+
+            for (int y = minY; y <= maxY; ++y) {
+                for (int x = minX; x <= maxX; ++x) {
+                    Vector2 p = { x + 0.5f, y + 0.5f };
+
+                    float w0 = edgeFunc(v1, v2, p);
+                    float w1 = edgeFunc(v2, v0, p);
+                    float w2 = edgeFunc(v0, v1, p);
+
+                    if (w0 >= 0.0f && w1 >= 0.0f && w2 >= 0.0f) {
+                        w0 *= invArea;
+                        w1 *= invArea;
+                        w2 *= invArea;
+
+                        float z = w0 * tri.v0.z + w1 * tri.v1.z + w2 * tri.v2.z;
+                        int pixelIndex = y * DEPTH_RES_X + x;
+
+                        if (m_UseReversedZ) {
+                            if (z > m_DepthBuffer[pixelIndex]) {
+                                m_DepthBuffer[pixelIndex] = z;
+                            }
+                        } else {
+                            if (z < m_DepthBuffer[pixelIndex]) {
+                                m_DepthBuffer[pixelIndex] = z;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+void CullingSystem::BeginOcclusionRasterizationAsync(
+    const std::vector<OccluderMesh>& occluders,
+    const float* vpMatrix,
+    float screenWidth,
+    float screenHeight)
+{
+    auto startTime = std::chrono::high_resolution_clock::now();
+
+    if (m_DepthBuffer.size() != DEPTH_RES_X * DEPTH_RES_Y) {
+        m_DepthBuffer.resize(DEPTH_RES_X * DEPTH_RES_Y);
+    }
+    float clearDepth = m_UseReversedZ ? 0.0f : 1.0f;
+    std::fill(m_DepthBuffer.begin(), m_DepthBuffer.end(), clearDepth);
+
+    // Phase 1: 4-Wide SIMD 오클루더 변환 및 후면 컬링
+    BatchOccluders(occluders, vpMatrix, screenWidth, screenHeight);
+    if (m_ScreenTriangles.empty()) {
+        auto endTime = std::chrono::high_resolution_clock::now();
+        m_LastAsyncRasterTimeUs.store(
+            static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(endTime - startTime).count()),
+            std::memory_order_release
+        );
+        return;
+    }
+
+    if (m_ThreadPool == nullptr) {
+        RasterizeTilesParallel(screenWidth, screenHeight);
+        auto endTime = std::chrono::high_resolution_clock::now();
+        m_LastAsyncRasterTimeUs.store(
+            static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(endTime - startTime).count()),
+            std::memory_order_release
+        );
+        return;
+    }
+
+    m_CachedScaleX = DEPTH_RES_X / screenWidth;
+    m_CachedScaleY = DEPTH_RES_Y / screenHeight;
+
+    if (m_BinningWorkerLists.size() != NUM_BINNING_JOBS) {
+        m_BinningWorkerLists.resize(NUM_BINNING_JOBS);
+    }
+    for (int j = 0; j < NUM_BINNING_JOBS; ++j) {
+        for (int t = 0; t < NUM_TILES; ++t) {
+            m_BinningWorkerLists[j].tileTriangles[t].clear();
+        }
+    }
+
+    m_RemainingBinningJobs.store(NUM_BINNING_JOBS, std::memory_order_release);
+    m_RemainingRasterJobs.store(NUM_TILES, std::memory_order_release);
+
+    // 전역 배리어(WaitAll) 없이 4개 비닝 잡 디스패치
+    // 마지막 비닝 잡이 끝나는 즉시 워커 스레드가 스스로 8개 타일 래스터화 잡을 스레드 풀에 체이닝함
+    for (int jobID = 0; jobID < NUM_BINNING_JOBS; ++jobID) {
+        m_ThreadPool->Enqueue([this, jobID, startTime]() {
+            this->ExecuteBinningJob(jobID);
+
+            if (this->m_RemainingBinningJobs.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+                for (int tileIdx = 0; tileIdx < NUM_TILES; ++tileIdx) {
+                    this->m_ThreadPool->Enqueue([this, tileIdx, startTime]() {
+                        this->ExecuteTileRasterJob(tileIdx);
+
+                        if (this->m_RemainingRasterJobs.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+                            auto finishTime = std::chrono::high_resolution_clock::now();
+                            uint64_t elapsedUs = static_cast<uint64_t>(
+                                std::chrono::duration_cast<std::chrono::microseconds>(finishTime - startTime).count()
+                            );
+                            this->m_LastAsyncRasterTimeUs.store(elapsedUs, std::memory_order_release);
+                        }
+                    });
+                }
+            }
+        });
+    }
+}
+
 void CullingSystem::RasterizeTilesParallel(float screenWidth, float screenHeight) {
     if (m_DepthBuffer.size() != DEPTH_RES_X * DEPTH_RES_Y) {
         m_DepthBuffer.resize(DEPTH_RES_X * DEPTH_RES_Y);
@@ -347,124 +559,25 @@ void CullingSystem::RasterizeTilesParallel(float screenWidth, float screenHeight
 
     if (m_ScreenTriangles.empty()) return;
 
-    const float tileW = static_cast<float>(DEPTH_RES_X) / TILE_COLS;
-    const float tileH = static_cast<float>(DEPTH_RES_Y) / TILE_ROWS;
+    m_CachedScaleX = DEPTH_RES_X / screenWidth;
+    m_CachedScaleY = DEPTH_RES_Y / screenHeight;
 
-    float scaleX = DEPTH_RES_X / screenWidth;
-    float scaleY = DEPTH_RES_Y / screenHeight;
-
-    // 4개의 비닝 잡이 8개 화면 타일에 대해 락 없이 총 32개(4x8)의 타일 리스트 생성
-    struct alignas(64) BinningJobList {
-        std::vector<int> tileTriangles[NUM_TILES];
-    };
-    std::vector<BinningJobList> workerLists(NUM_BINNING_JOBS);
-
-    auto binningTask = [&](int jobID) {
-        size_t totalTris = m_ScreenTriangles.size();
-        size_t chunk = (totalTris + NUM_BINNING_JOBS - 1) / NUM_BINNING_JOBS;
-        size_t start = static_cast<size_t>(jobID) * chunk;
-        size_t end = (std::min)(start + chunk, totalTris);
-
-        for (size_t i = start; i < end; ++i) {
-            const auto& tri = m_ScreenTriangles[i];
-
-            float minX = (std::min)(tri.v0.x, (std::min)(tri.v1.x, tri.v2.x)) * scaleX;
-            float maxX = (std::max)(tri.v0.x, (std::max)(tri.v1.x, tri.v2.x)) * scaleX;
-            float minY = (std::min)(tri.v0.y, (std::min)(tri.v1.y, tri.v2.y)) * scaleY;
-            float maxY = (std::max)(tri.v0.y, (std::max)(tri.v1.y, tri.v2.y)) * scaleY;
-
-            if (maxX < 0.0f || minX >= DEPTH_RES_X || maxY < 0.0f || minY >= DEPTH_RES_Y) continue;
-
-            minX = (std::max)(0.0f, minX);
-            minY = (std::max)(0.0f, minY);
-            maxX = (std::min)(static_cast<float>(DEPTH_RES_X - 1), maxX);
-            maxY = (std::min)(static_cast<float>(DEPTH_RES_Y - 1), maxY);
-
-            int startTileX = static_cast<int>(minX / tileW);
-            int endTileX   = static_cast<int>(maxX / tileW);
-            int startTileY = static_cast<int>(minY / tileH);
-            int endTileY   = static_cast<int>(maxY / tileH);
-
-            for (int ty = startTileY; ty <= endTileY; ++ty) {
-                for (int tx = startTileX; tx <= endTileX; ++tx) {
-                    int tileIndex = ty * TILE_COLS + tx;
-                    if (tileIndex >= 0 && tileIndex < NUM_TILES) {
-                        workerLists[jobID].tileTriangles[tileIndex].push_back(static_cast<int>(i));
-                    }
-                }
-            }
+    if (m_BinningWorkerLists.size() != NUM_BINNING_JOBS) {
+        m_BinningWorkerLists.resize(NUM_BINNING_JOBS);
+    }
+    for (int j = 0; j < NUM_BINNING_JOBS; ++j) {
+        for (int t = 0; t < NUM_TILES; ++t) {
+            m_BinningWorkerLists[j].tileTriangles[t].clear();
         }
-    };
+    }
 
-    DispatchParallel(NUM_BINNING_JOBS, binningTask);
+    DispatchParallel(NUM_BINNING_JOBS, [this](int jobID) {
+        this->ExecuteBinningJob(jobID);
+    });
 
-    // 8개의 렌더 잡이 8개 화면 타일을 1개씩(t = 0..7) 전담하여 락프리 래스터화 수행
-    auto rasterTask = [&](int tileIdx) {
-        if (tileIdx < 0 || tileIdx >= NUM_TILES) return;
-
-        int tx = tileIdx % TILE_COLS;
-        int ty = tileIdx / TILE_COLS;
-        int tileMinX = static_cast<int>(tx * tileW);
-        int tileMaxX = static_cast<int>((tx + 1) * tileW) - 1;
-        int tileMinY = static_cast<int>(ty * tileH);
-        int tileMaxY = static_cast<int>((ty + 1) * tileH) - 1;
-
-        auto edgeFunc = [](const Vector2& a, const Vector2& b, const Vector2& c) {
-            return (c.x - a.x) * (b.y - a.y) - (c.y - a.y) * (b.x - a.x);
-        };
-
-        for (int jobID = 0; jobID < NUM_BINNING_JOBS; ++jobID) {
-            const auto& tris = workerLists[jobID].tileTriangles[tileIdx];
-
-            for (int triID : tris) {
-                const auto& tri = m_ScreenTriangles[triID];
-
-                Vector2 v0 = { tri.v0.x * scaleX, tri.v0.y * scaleY };
-                Vector2 v1 = { tri.v1.x * scaleX, tri.v1.y * scaleY };
-                Vector2 v2 = { tri.v2.x * scaleX, tri.v2.y * scaleY };
-
-                int minX = (std::max)(tileMinX, static_cast<int>( std::floor((std::min)(v0.x, (std::min)(v1.x, v2.x))) ));
-                int maxX = (std::min)(tileMaxX, static_cast<int>( std::ceil((std::max)(v0.x, (std::max)(v1.x, v2.x))) ));
-                int minY = (std::max)(tileMinY, static_cast<int>( std::floor((std::min)(v0.y, (std::min)(v1.y, v2.y))) ));
-                int maxY = (std::min)(tileMaxY, static_cast<int>( std::ceil((std::max)(v0.y, (std::max)(v1.y, v2.y))) ));
-
-                float area = edgeFunc(v0, v1, v2);
-                if (std::abs(area) < 1e-6f) continue;
-                float invArea = 1.0f / area;
-
-                for (int y = minY; y <= maxY; ++y) {
-                    for (int x = minX; x <= maxX; ++x) {
-                        Vector2 p = { x + 0.5f, y + 0.5f };
-
-                        float w0 = edgeFunc(v1, v2, p);
-                        float w1 = edgeFunc(v2, v0, p);
-                        float w2 = edgeFunc(v0, v1, p);
-
-                        if (w0 >= 0.0f && w1 >= 0.0f && w2 >= 0.0f) {
-                            w0 *= invArea;
-                            w1 *= invArea;
-                            w2 *= invArea;
-
-                            float z = w0 * tri.v0.z + w1 * tri.v1.z + w2 * tri.v2.z;
-                            int pixelIndex = y * DEPTH_RES_X + x;
-
-                            if (m_UseReversedZ) {
-                                if (z > m_DepthBuffer[pixelIndex]) {
-                                    m_DepthBuffer[pixelIndex] = z;
-                                }
-                            } else {
-                                if (z < m_DepthBuffer[pixelIndex]) {
-                                    m_DepthBuffer[pixelIndex] = z;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    };
-
-    DispatchParallel(NUM_TILES, rasterTask);
+    DispatchParallel(NUM_TILES, [this](int tileIdx) {
+        this->ExecuteTileRasterJob(tileIdx);
+    });
 }
 
 void CullingSystem::PerformOcclusionTestParallel(

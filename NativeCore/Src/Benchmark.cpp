@@ -148,11 +148,38 @@ void BenchmarkManager::RunHeadlessBenchmark(int instanceCount, int iterations, b
             chunks = ecs.QueryChunks(mask);
         }
 
-        // [Phase 2: 15-Worker Multi-View Frustum Culling & Inline SubRenderer Expansion]
+        // [Phase 2 & 2.5: 전역 배리어 없는 비동기 오클루전 래스터화 + 멀티뷰 프러스텀 컬링 오버랩]
         std::vector<SimInstance> frustumSurvivors;
         frustumSurvivors.reserve(instanceCount);
         uint32_t culledFrustumDraws = 0;
 
+        // 1. 오클루전 컬링 활성화 시: 프러스텀 컬링 전에 비동기 오클루더 배치 + 4비닝 -> 8래스터 체이닝을 먼저 발사 (No Wait)
+        if (runOcclusion) {
+            std::vector<OccluderMesh> proxyOccluders(1);
+            OccluderMesh& wall = proxyOccluders[0];
+            for (int q = 0; q < 4; ++q) {
+                float ox = (static_cast<float>(q) - 1.5f) * 35.0f;
+                float oz = (q % 2 == 0) ? -15.0f : 15.0f;
+                uint32_t baseVtx = static_cast<uint32_t>(wall.vertices.size());
+                wall.vertices.push_back({ ox - 14.0f, -5.0f, oz });
+                wall.vertices.push_back({ ox + 14.0f, -5.0f, oz });
+                wall.vertices.push_back({ ox + 14.0f, 18.0f, oz });
+                wall.vertices.push_back({ ox - 14.0f, 18.0f, oz });
+                wall.indices.insert(wall.indices.end(), {
+                    baseVtx + 0, baseVtx + 1, baseVtx + 2,
+                    baseVtx + 0, baseVtx + 2, baseVtx + 3,
+                    baseVtx + 0, baseVtx + 2, baseVtx + 1,
+                    baseVtx + 0, baseVtx + 3, baseVtx + 2
+                });
+            }
+            std::memset(wall.localToWorld, 0, sizeof(wall.localToWorld));
+            wall.localToWorld[0] = wall.localToWorld[5] = wall.localToWorld[10] = wall.localToWorld[15] = 1.0f;
+
+            // 대기(WaitAll) 없이 즉시 반환 -> 워커 스레드들이 백그라운드에서 4비닝 -> 8타일 래스터화 시작
+            cullingSys.BeginOcclusionRasterizationAsync(proxyOccluders, vp, 1280.0f, 720.0f);
+        }
+
+        // 2. 오클루전 깊이 버퍼가 만들어지는 동안 멈추지 않고 동시에 프러스텀 컬링 & 트랜스폼/거리 계산 수행
         {
             ScopedTimer timer(&iterStats.frustumCullingTimeMs);
             ecs.AcquireWorkerReadFence();
@@ -195,6 +222,7 @@ void BenchmarkManager::RunHeadlessBenchmark(int instanceCount, int iterations, b
 
             std::vector<uint32_t> visMasks;
             if (enableCulling) {
+                // 내부의 DispatchParallel -> WaitAll()이 오클루전 깊이 버퍼와 프러스텀 컬링이 동시에 합류하는 단일 CPU 잡 펜스 역할을 수행
                 cullingSys.PerformMultiViewFrustumCullingParallel(
                     &frustum,
                     1,
@@ -251,53 +279,34 @@ void BenchmarkManager::RunHeadlessBenchmark(int instanceCount, int iterations, b
         }
         iterStats.culledFrustum = culledFrustumDraws;
 
-        // [Phase 2.5: 3-Stage Software Occlusion Culling (선택 활성화 시)]
+        // 3. [합류 완료] 이미 완성된 Hi-Z 깊이 버퍼에 대해 생존 엔티티 AABB만 4-Wide SIMD 깊이 비교 수행
         std::vector<SimInstance> visibleList;
         if (runOcclusion && !frustumSurvivors.empty()) {
-            ScopedTimer timer(&iterStats.occlusionCullingTimeMs);
+            float depthTestMs = 0.0f;
+            {
+                ScopedTimer timer(&depthTestMs);
 
-            std::vector<OccluderMesh> proxyOccluders(1);
-            OccluderMesh& wall = proxyOccluders[0];
-            for (int q = 0; q < 4; ++q) {
-                float ox = (static_cast<float>(q) - 1.5f) * 35.0f;
-                float oz = (q % 2 == 0) ? -15.0f : 15.0f;
-                uint32_t baseVtx = static_cast<uint32_t>(wall.vertices.size());
-                wall.vertices.push_back({ ox - 14.0f, -5.0f, oz });
-                wall.vertices.push_back({ ox + 14.0f, -5.0f, oz });
-                wall.vertices.push_back({ ox + 14.0f, 18.0f, oz });
-                wall.vertices.push_back({ ox - 14.0f, 18.0f, oz });
-                wall.indices.insert(wall.indices.end(), {
-                    baseVtx + 0, baseVtx + 1, baseVtx + 2,
-                    baseVtx + 0, baseVtx + 2, baseVtx + 3,
-                    baseVtx + 0, baseVtx + 2, baseVtx + 1,
-                    baseVtx + 0, baseVtx + 3, baseVtx + 2
-                });
-            }
-            std::memset(wall.localToWorld, 0, sizeof(wall.localToWorld));
-            wall.localToWorld[0] = wall.localToWorld[5] = wall.localToWorld[10] = wall.localToWorld[15] = 1.0f;
+                std::vector<bool> occVis;
+                AABB defaultBounds = { {-1.0f, -1.0f, -1.0f}, {1.0f, 1.0f, 1.0f} };
+                cullingSys.PerformOcclusionTestParallel(
+                    vp,
+                    reinterpret_cast<const float*>(frustumSurvivors.data()),
+                    static_cast<int>(frustumSurvivors.size()),
+                    sizeof(SimInstance),
+                    defaultBounds,
+                    1280.0f,
+                    720.0f,
+                    occVis
+                );
 
-            cullingSys.BatchOccluders(proxyOccluders, vp, 1280.0f, 720.0f);
-            cullingSys.RasterizeTilesParallel(1280.0f, 720.0f);
-
-            std::vector<bool> occVis;
-            AABB defaultBounds = { {-1.0f, -1.0f, -1.0f}, {1.0f, 1.0f, 1.0f} };
-            cullingSys.PerformOcclusionTestParallel(
-                vp,
-                reinterpret_cast<const float*>(frustumSurvivors.data()),
-                static_cast<int>(frustumSurvivors.size()),
-                sizeof(SimInstance),
-                defaultBounds,
-                1280.0f,
-                720.0f,
-                occVis
-            );
-
-            visibleList.reserve(frustumSurvivors.size());
-            for (size_t i = 0; i < frustumSurvivors.size(); ++i) {
-                if (i < occVis.size() && occVis[i]) {
-                    visibleList.push_back(frustumSurvivors[i]);
+                visibleList.reserve(frustumSurvivors.size());
+                for (size_t i = 0; i < frustumSurvivors.size(); ++i) {
+                    if (i < occVis.size() && occVis[i]) {
+                        visibleList.push_back(frustumSurvivors[i]);
+                    }
                 }
             }
+            iterStats.occlusionCullingTimeMs = depthTestMs;
             iterStats.culledOcclusion = static_cast<uint32_t>(frustumSurvivors.size() - visibleList.size());
         } else {
             visibleList = std::move(frustumSurvivors);
