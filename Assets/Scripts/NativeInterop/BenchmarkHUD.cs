@@ -144,7 +144,7 @@ namespace Endfield.NativeInterop
 
             // Title Header
             GUILayout.BeginHorizontal();
-            GUILayout.Label("ARKKNIGHTS: ENDFIELD BENCHMARK", m_HeaderStyle);
+            GUILayout.Label("ARKNIGHTS: ENDFIELD BENCHMARK", m_HeaderStyle);
             if (GUILayout.Button("X", m_ButtonStyle, GUILayout.Width(24), GUILayout.Height(20)))
             {
                 m_ShowHUD = false;

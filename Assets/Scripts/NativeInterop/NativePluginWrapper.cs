@@ -56,6 +56,9 @@ namespace Endfield.NativeInterop
             public uint visibleInstances;
             public uint culledFrustum;
             public uint culledOcclusion;
+            public uint drawCallCount;
+            public uint pipelineBindCount;
+            public uint descriptorSetBindCount;
             public float ecsQueryTimeMs;
             public float frustumCullingTimeMs;
             public float occlusionCullingTimeMs;

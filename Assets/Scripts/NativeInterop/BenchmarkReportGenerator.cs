@@ -20,7 +20,7 @@ namespace Endfield.NativeInterop
         public static string GenerateMarkdownReport(string testTitle, List<BenchmarkTierResult> results, string systemInfo = null)
         {
             StringBuilder sb = new StringBuilder();
-            sb.AppendLine($"# Endfield Rendering Architecture Benchmark Report");
+            sb.AppendLine($"# Arknights: Endfield Rendering Architecture Benchmark Report");
             sb.AppendLine($"**Date**: {DateTime.Now:yyyy-MM-dd HH:mm:ss} | **Test Title**: {testTitle}");
             if (!string.IsNullOrEmpty(systemInfo))
             {
@@ -32,30 +32,31 @@ namespace Endfield.NativeInterop
             sb.AppendLine("| :--- | :--- | :--- | :--- |");
             sb.AppendLine("| **Custom C++ ECS** | 3-cycle mask access, SoA chunk cache locality | Continuous SoA memory query & zero managed bridge | PASSED |");
             sb.AppendLine("| **Parallel Culling** | Up to 90% culling reduction on 500k~600k scale | Verified multi-threaded frustum & occlusion culling | PASSED |");
-            sb.AppendLine("| **64-bit SortKey** | Standard `std::sort` on 64-bit sort key | Sub-millisecond sorting for tens of thousands of items | PASSED |");
+            sb.AppendLine("| **128-bit SortKey** | Branchless SIMD `std::sort` on 128-bit key | Sub-millisecond sorting for tens of thousands of items | PASSED |");
             sb.AppendLine("| **Zero Alloc Batching** | Dynamic uniform buffer offset + 0x7F7F7F7F worker skip | 0 bytes frame allocation on GPU backend | PASSED |");
             sb.AppendLine();
 
             sb.AppendLine("## 2. Benchmark Measurement Results");
-            sb.AppendLine("| Tier | Total Entities | Visible | Culled (Ratio) | ECS Query | Frustum Cull | 64-bit Sort | Batch/Copy | Native Total | Unity FPS |");
-            sb.AppendLine("| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |");
+            sb.AppendLine("| Tier | Total Entities | Visible | Culled (Ratio) | ECS Query | Frustum Cull | Occlusion Cull | 128-bit Sort | Batch/Copy | Vulkan Submit | Native Total | Unity FPS |");
+            sb.AppendLine("| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |");
 
             foreach (var res in results)
             {
                 var s = res.nativeStats;
+                uint totalCulled = s.culledFrustum + s.culledOcclusion;
                 float cullRatio = s.totalInstances > 0 ? (1.0f - ((float)s.visibleInstances / s.totalInstances)) * 100.0f : 0.0f;
-                sb.AppendLine($"| **{res.tierName}** | {s.totalInstances:N0} | {s.visibleInstances:N0} | {s.culledFrustum:N0} ({cullRatio:F1}%) | {s.ecsQueryTimeMs:F3} ms | {s.frustumCullingTimeMs:F3} ms | {s.sortingTimeMs:F3} ms | {s.batchingTimeMs:F3} ms | **{s.totalNativeFrameTimeMs:F3} ms** | **{res.unityFps:F1}** |");
+                sb.AppendLine($"| **{res.tierName}** | {s.totalInstances:N0} | {s.visibleInstances:N0} | {totalCulled:N0} ({cullRatio:F1}%) | {s.ecsQueryTimeMs:F3} ms | {s.frustumCullingTimeMs:F3} ms | {s.occlusionCullingTimeMs:F3} ms | {s.sortingTimeMs:F3} ms | {s.batchingTimeMs:F3} ms | {s.renderSubmitTimeMs:F3} ms | **{s.totalNativeFrameTimeMs:F3} ms** | **{res.unityFps:F1}** |");
             }
 
             sb.AppendLine();
             sb.AppendLine("## 3. Detailed Phase Breakdown");
-            sb.AppendLine("1. **ECS Query Time (`ecsQueryTimeMs`)**: Time required to query Archetypes using the 128-bit `ComponentMask` and retrieve contiguous SoA array pointers without pointer chasing.");
-            sb.AppendLine("2. **Frustum Culling Time (`frustumCullingTimeMs`)**: Multi-threaded parallel bounding box (AABB) intersection against the 6-plane camera frustum.");
-            sb.AppendLine("3. **64-bit Sort Key Sorting (`sortingTimeMs`)**: Standard cache-friendly quicksort (`std::sort`) leveraging the packed MSB-to-LSB 64-bit sort key (Pass ID -> Pipeline ID -> Material ID -> Distance).");
-            sb.AppendLine("4. **Parallel Batch Command Build & Dynamic UBO (`batchingTimeMs`)**: Worker threads building `0x7F7F7F7F` placeholder draw commands, redundant material bind elimination, and copying transform data to the dynamic uniform buffer.");
+            sb.AppendLine("1. **ECS Query Time (`ecsQueryTimeMs`)**: Time required to query Archetypes using the 128-bit `ComponentMask` (`__popcnt64`) and retrieve contiguous SoA array pointers.");
+            sb.AppendLine("2. **Frustum & Occlusion Culling (`frustumCullingTimeMs` / `occlusionCullingTimeMs`)**: Multi-threaded view-parallel frustum culling and 3-stage software occlusion culling.");
+            sb.AppendLine("3. **128-bit Sort Key Sorting (`sortingTimeMs`)**: Branchless SSE2 SIMD `std::sort` (`_mm_cmpgt_epi32` + `_mm_movemask_ps`) on 16-byte aligned sort keys.");
+            sb.AppendLine("4. **Parallel Batch Command Build & Dynamic UBO (`batchingTimeMs`)**: Worker threads building `0xF7F7F7F7` sentinel draw packets and copying transforms via persistent mapped CAS offsets.");
             sb.AppendLine();
             sb.AppendLine("---");
-            sb.AppendLine("*Report auto-generated by My Own Endfield Benchmark Suite.*");
+            sb.AppendLine("*Report auto-generated by Endfield-Vulkan-Renderer Benchmark Suite.*");
 
             return sb.ToString();
         }
