@@ -64,13 +64,16 @@ void BenchmarkManager::RunHeadlessBenchmark(int instanceCount, int iterations, b
     ComponentRegistry::RegisterComponent(BIT_SUB_RENDERERS, sizeof(InlineSubRendererComponent));
     ComponentRegistry::RegisterComponent(BIT_VISIBILITY,    sizeof(uint32_t));
 
+    // InlineSubRendererComponent를 포함하는 아키타입 마스크
     ComponentMask mask;
-    mask.low = MASK_STANDARD_RENDER | MASK_VISIBILITY;
+    mask.low = MASK_TRANSFORM | MASK_BOUNDS | MASK_SUB_RENDERERS | MASK_VISIBILITY;
 
-    constexpr int SUBMESH_COUNT = 19;
+    constexpr uint32_t SUBMESH_COUNT = 19;
+    uint32_t characterCount = (static_cast<uint32_t>(instanceCount) + SUBMESH_COUNT - 1) / SUBMESH_COUNT;
+    uint32_t remainingDraws = static_cast<uint32_t>(instanceCount);
     float spread = 300.0f;
 
-    for (int i = 0; i < instanceCount; ++i) {
+    for (uint32_t c = 0; c < characterCount; ++c) {
         Entity ent = ecs.CreateEntity(mask);
 
         float x = (((float)rand() / RAND_MAX) - 0.5f) * spread;
@@ -90,14 +93,19 @@ void BenchmarkManager::RunHeadlessBenchmark(int instanceCount, int iterations, b
         b.minBounds[0] = x - 1.0f; b.minBounds[1] = y - 1.0f; b.minBounds[2] = z - 1.0f;
         b.maxBounds[0] = x + 1.0f; b.maxBounds[1] = y + 1.0f; b.maxBounds[2] = z + 1.0f;
 
-        MeshComponent m{};
-        m.meshId       = 0;                 // 원본 캐릭터 메시 1세트 공유 시나리오
-        m.subMeshIndex = i % SUBMESH_COUNT; // 19개 서브메시 분포
-        m.materialId   = i % SUBMESH_COUNT; // 19개 서브메시별 머티리얼
+        // 포인터 점프 없이 청크 내부 컬럼에 19개 서브메시 정보를 직접 인라인 수납
+        InlineSubRendererComponent subComp{};
+        subComp.meshId = 0;
+        subComp.subMeshCount = (std::min)(remainingDraws, SUBMESH_COUNT);
+        for (uint32_t s = 0; s < subComp.subMeshCount; ++s) {
+            subComp.subMeshIndices[s] = static_cast<uint16_t>(s);
+            subComp.materialIds[s]    = static_cast<uint16_t>(s);
+        }
+        remainingDraws -= subComp.subMeshCount;
 
-        ecs.SetComponentData(ent, BIT_TRANSFORM, t);
-        ecs.SetComponentData(ent, BIT_BOUNDS,    b);
-        ecs.SetComponentData(ent, BIT_MESH,      m);
+        ecs.SetComponentData(ent, BIT_TRANSFORM,     t);
+        ecs.SetComponentData(ent, BIT_BOUNDS,        b);
+        ecs.SetComponentData(ent, BIT_SUB_RENDERERS, subComp);
     }
 
     // 2. 카메라 프러스텀 및 15개 워커 스레드 풀 / 컬링 시스템 초기화
@@ -140,19 +148,19 @@ void BenchmarkManager::RunHeadlessBenchmark(int instanceCount, int iterations, b
             chunks = ecs.QueryChunks(mask);
         }
 
-        // [Phase 2: 15-Worker Multi-View Frustum Culling & Chunk AABB Pre-Culling]
+        // [Phase 2: 15-Worker Multi-View Frustum Culling & Inline SubRenderer Expansion]
         std::vector<SimInstance> frustumSurvivors;
         frustumSurvivors.reserve(instanceCount);
-        uint32_t culledFrustumCount = 0;
+        uint32_t culledFrustumDraws = 0;
 
         {
             ScopedTimer timer(&iterStats.frustumCullingTimeMs);
             ecs.AcquireWorkerReadFence();
 
             constexpr uint32_t CULL_BATCH_SIZE = 256;
-            uint32_t numCullChunks = (static_cast<uint32_t>(instanceCount) + CULL_BATCH_SIZE - 1) / CULL_BATCH_SIZE;
+            uint32_t numCullChunks = (characterCount + CULL_BATCH_SIZE - 1) / CULL_BATCH_SIZE;
 
-            std::vector<AABB> entityAABBs(instanceCount);
+            std::vector<AABB> entityAABBs(characterCount);
             std::vector<AABB> chunkAABBs(numCullChunks);
 
             for (uint32_t c = 0; c < numCullChunks; ++c) {
@@ -199,47 +207,51 @@ void BenchmarkManager::RunHeadlessBenchmark(int instanceCount, int iterations, b
 
             uint32_t readIdx = 0;
             for (auto* chunk : chunks) {
-                auto* transforms = ecs.GetComponentArray<TransformComponent>(chunk, BIT_TRANSFORM);
-                auto* meshes     = ecs.GetComponentArray<MeshComponent>(chunk, BIT_MESH);
-                auto* visColumn  = ecs.GetComponentArray<uint32_t>(chunk, BIT_VISIBILITY);
+                auto* transforms   = ecs.GetComponentArray<TransformComponent>(chunk, BIT_TRANSFORM);
+                auto* subRenderers = ecs.GetComponentArray<InlineSubRendererComponent>(chunk, BIT_SUB_RENDERERS);
+                auto* visColumn    = ecs.GetComponentArray<uint32_t>(chunk, BIT_VISIBILITY);
 
-                if (!transforms || !meshes) continue;
+                if (!transforms || !subRenderers) continue;
 
                 for (uint32_t i = 0; i < chunk->entityCount; ++i, ++readIdx) {
                     uint32_t vis = enableCulling ? visMasks[readIdx] : 1u;
                     if (visColumn) visColumn[i] = vis;
 
-                    if ((vis & (1u << 0)) != 0u) {
-                        SimInstance inst{};
-                        for (int k = 0; k < 16; ++k) inst.mvpMatrix[k] = transforms[i].localToWorld[k];
+                    const InlineSubRendererComponent& subComp = subRenderers[i];
 
+                    if ((vis & (1u << 0)) != 0u) {
                         float dx = transforms[i].localToWorld[12];
                         float dy = transforms[i].localToWorld[13] - 50.0f;
                         float dz = transforms[i].localToWorld[14] + 150.0f;
                         float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
 
-                        inst.sortKey = SortKeyBuilder::CreateOpaque(
-                            0u,
-                            1u,
-                            static_cast<uint16_t>(meshes[i].materialId),
-                            dist,
-                            DEFAULT_MAX_SORT_DISTANCE,
-                            static_cast<uint16_t>(meshes[i].meshId),
-                            static_cast<uint16_t>(meshes[i].subMeshIndex)
-                        );
-                        inst.subMeshIndex = static_cast<uint32_t>(meshes[i].subMeshIndex);
-                        frustumSurvivors.push_back(inst);
+                        SimInstance inst{};
+                        for (int k = 0; k < 16; ++k) inst.mvpMatrix[k] = transforms[i].localToWorld[k];
+
+                        for (uint32_t s = 0; s < subComp.subMeshCount; ++s) {
+                            inst.sortKey = SortKeyBuilder::CreateOpaque(
+                                0u,
+                                1u,
+                                subComp.materialIds[s],
+                                dist,
+                                DEFAULT_MAX_SORT_DISTANCE,
+                                static_cast<uint16_t>(subComp.meshId),
+                                subComp.subMeshIndices[s]
+                            );
+                            inst.subMeshIndex = static_cast<uint32_t>(subComp.subMeshIndices[s]);
+                            frustumSurvivors.push_back(inst);
+                        }
                     } else {
-                        culledFrustumCount++;
+                        culledFrustumDraws += subComp.subMeshCount;
                     }
                 }
             }
 
             ecs.ReleaseWorkerReadFence();
         }
-        iterStats.culledFrustum = culledFrustumCount;
+        iterStats.culledFrustum = culledFrustumDraws;
 
-        // [3-Stage Software Occlusion Culling (선택 활성화 시)]
+        // [Phase 2.5: 3-Stage Software Occlusion Culling (선택 활성화 시)]
         std::vector<SimInstance> visibleList;
         if (runOcclusion && !frustumSurvivors.empty()) {
             ScopedTimer timer(&iterStats.occlusionCullingTimeMs);
@@ -343,7 +355,6 @@ void BenchmarkManager::RunHeadlessBenchmark(int instanceCount, int iterations, b
                             uint32_t slotIdx = claimedBaseSlot + static_cast<uint32_t>(i - startIdx);
                             uint32_t offset = slotIdx * static_cast<uint32_t>(dynamicAlign);
 
-                            // 워커 스레드가 CAS로 확보한 오프셋에 곧바로 memcpy
                             std::memcpy(mappedPtr + offset, &visibleList[i], sizeof(SimInstance));
 
                             SimIntermediateCmd cmd;
@@ -358,7 +369,6 @@ void BenchmarkManager::RunHeadlessBenchmark(int instanceCount, int iterations, b
                 }
                 threadPool.WaitAll();
 
-                // 싱글 렌더 스레드: 0xF7F7F7F7 센티넬 뒤채움(Backfill) 및 중복 바인드 생략
                 uint32_t lastBoundMaterial = 0xFFFFFFFFu;
                 for (int i = 0; i < visibleCount; ++i) {
                     if (intermediateCmds[i].placeholder == PLACEHOLDER) {

@@ -41,7 +41,7 @@ static LRESULT CALLBACK StandaloneWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam
     switch (uMsg) {
         case WM_CLOSE:
             g_WindowShouldClose = true;
-            return 0; // Prevent immediate destruction
+            return 0;
         case WM_SAFE_DESTROY:
             DestroyWindow(hwnd);
             return 0;
@@ -108,6 +108,42 @@ static void WindowThreadFunc(uint32_t width, uint32_t height) {
 }
 #endif
 
+struct SpawnTemplateData {
+    Endfield::TransformComponent t;
+    Endfield::BoundsComponent b;
+    Endfield::MeshComponent m;
+};
+static std::vector<SpawnTemplateData> g_SpawnTemplates;
+
+// 19개 서브메시 템플릿을 단일 캐릭터 아키타입(InlineSubRendererComponent)으로 병합하는 헬퍼
+static void BuildInlineCharacterTemplate(
+    Endfield::TransformComponent& outTransform,
+    Endfield::BoundsComponent& outCombinedBounds,
+    Endfield::InlineSubRendererComponent& outInlineSub)
+{
+    outTransform = g_SpawnTemplates[0].t;
+    outCombinedBounds = g_SpawnTemplates[0].b;
+
+    outInlineSub = {};
+    outInlineSub.meshId = g_SpawnTemplates[0].m.meshId;
+    uint32_t count = (std::min)(
+        static_cast<uint32_t>(g_SpawnTemplates.size()),
+        Endfield::MAX_INLINE_SUB_RENDERERS
+    );
+    outInlineSub.subMeshCount = count;
+
+    for (uint32_t s = 0; s < count; ++s) {
+        outInlineSub.subMeshIndices[s] = static_cast<uint16_t>(g_SpawnTemplates[s].m.subMeshIndex);
+        outInlineSub.materialIds[s]    = static_cast<uint16_t>(g_SpawnTemplates[s].m.materialId);
+
+        // 캐릭터 전체를 감싸는 단일 AABB로 서브메시 바운드 통합
+        for (int axis = 0; axis < 3; ++axis) {
+            outCombinedBounds.minBounds[axis] = (std::min)(outCombinedBounds.minBounds[axis], g_SpawnTemplates[s].b.minBounds[axis]);
+            outCombinedBounds.maxBounds[axis] = (std::max)(outCombinedBounds.maxBounds[axis], g_SpawnTemplates[s].b.maxBounds[axis]);
+        }
+    }
+}
+
 extern "C" {
 
 ENDFIELD_API void InitializeVulkanRenderer(void* windowHandle, uint32_t width, uint32_t height)
@@ -139,22 +175,15 @@ ENDFIELD_API void InitializeVulkanRenderer(void* windowHandle, uint32_t width, u
     
     if (!g_ECS) {
         g_ECS = std::make_unique<Endfield::ECSManager>();
-        // Bit 0: Pinned Pointer (float*) for Unity bridging
         Endfield::ComponentRegistry::RegisterComponent(0, sizeof(float*));
-        // Bit 1: TransformComponent (64 bytes)
-        Endfield::ComponentRegistry::RegisterComponent(Endfield::BIT_TRANSFORM, sizeof(Endfield::TransformComponent));
-        // Bit 2: BoundsComponent (24 bytes)
-        Endfield::ComponentRegistry::RegisterComponent(Endfield::BIT_BOUNDS, sizeof(Endfield::BoundsComponent));
-        // Bit 3: MeshComponent (12 bytes)
-        Endfield::ComponentRegistry::RegisterComponent(Endfield::BIT_MESH, sizeof(Endfield::MeshComponent));
-        // Bit 4: InlineSubRendererComponent
+        Endfield::ComponentRegistry::RegisterComponent(Endfield::BIT_TRANSFORM,     sizeof(Endfield::TransformComponent));
+        Endfield::ComponentRegistry::RegisterComponent(Endfield::BIT_BOUNDS,        sizeof(Endfield::BoundsComponent));
+        Endfield::ComponentRegistry::RegisterComponent(Endfield::BIT_MESH,          sizeof(Endfield::MeshComponent));
         Endfield::ComponentRegistry::RegisterComponent(Endfield::BIT_SUB_RENDERERS, sizeof(Endfield::InlineSubRendererComponent));
-        // Bit 5: Visibility bitmask (uint32_t)
-        Endfield::ComponentRegistry::RegisterComponent(Endfield::BIT_VISIBILITY, sizeof(uint32_t));
+        Endfield::ComponentRegistry::RegisterComponent(Endfield::BIT_VISIBILITY,    sizeof(uint32_t));
     }
     
     if (!g_Culling) {
-        // Ryzen 7 7700(16논리 코어) 기준 15개 워커 스레드 풀 생성 및 주입
         uint32_t hwThreads = std::thread::hardware_concurrency();
         uint32_t numWorkers = (hwThreads > 1) ? (hwThreads - 1) : 4;
         g_CullingThreadPool = std::make_unique<Endfield::ThreadPool>(numWorkers);
@@ -220,13 +249,15 @@ ENDFIELD_API void ExecuteNativeRenderLoop()
         if (g_Backend && g_Backend->BeginFrame()) {
             if (g_ECS && g_Culling) {
                 auto& stats = Endfield::BenchmarkManager::Instance().GetCurrentFrameStats();
-                Endfield::ComponentMask mask;
-                mask.low = Endfield::MASK_STANDARD_RENDER;
+
+                // Transform + Bounds를 가진 모든 렌더러 청크 조회 (InlineSubRenderer 및 단일 Mesh 모두 호환)
+                Endfield::ComponentMask queryMask;
+                queryMask.low = Endfield::MASK_TRANSFORM | Endfield::MASK_BOUNDS;
                 
                 std::vector<Endfield::Chunk*> chunks;
                 {
                     Endfield::ScopedTimer timer(&stats.ecsQueryTimeMs);
-                    chunks = g_ECS->QueryChunks(mask);
+                    chunks = g_ECS->QueryChunks(queryMask);
                 }
                 
                 // View-Projection 행렬 계산
@@ -249,14 +280,12 @@ ENDFIELD_API void ExecuteNativeRenderLoop()
                 }
 
                 std::vector<Endfield::VulkanBackend::InstanceData> visibleInstances;
-                visibleInstances.reserve(totalEntities);
-                uint32_t culledFrustum = 0;
+                uint32_t totalSubMeshDraws = 0;
+                uint32_t culledFrustumDraws = 0;
                 bool enableFrustum = Endfield::BenchmarkManager::Instance().IsFrustumCullingEnabled();
 
                 {
                     Endfield::ScopedTimer timer(&stats.frustumCullingTimeMs);
-
-                    // 워커 스레드 순회 중 구조적 변경(DestroyEntity 등)을 막기 위한 경량 잡 펜스 획득
                     g_ECS->AcquireWorkerReadFence();
 
                     if (totalEntities > 0) {
@@ -275,7 +304,7 @@ ENDFIELD_API void ExecuteNativeRenderLoop()
                             chunkAABBs[c].maxBounds[2] = std::numeric_limits<float>::lowest();
                         }
 
-                        // 1. SoA 청크에서 Bounds 컬럼을 읽어 엔티티 AABB 및 월드 청크 AABB 구성
+                        // 1. 캐릭터 엔티티 단위(10,000개) AABB 및 256단위 월드 청크 AABB 구성
                         uint32_t writeIdx = 0;
                         for (auto* chunk : chunks) {
                             auto* bounds = g_ECS->GetComponentArray<Endfield::BoundsComponent>(chunk, Endfield::BIT_BOUNDS);
@@ -297,7 +326,7 @@ ENDFIELD_API void ExecuteNativeRenderLoop()
                             }
                         }
 
-                        // 2. 15개 워커 스레드 뷰 병렬 프러스텀 컬링 & 청크 AABB 사전 컬링
+                        // 2. 15개 워커 뷰 병렬 프러스텀 컬링 (캐릭터당 1회만 검사)
                         std::vector<uint32_t> visMasks;
                         if (enableFrustum) {
                             g_Culling->PerformMultiViewFrustumCullingParallel(
@@ -310,14 +339,17 @@ ENDFIELD_API void ExecuteNativeRenderLoop()
                             );
                         }
 
-                        // 3. 비트마스크 판별(vis & (1u << 0)) 및 128-bit SortKey 조립
+                        visibleInstances.reserve(totalEntities * 19);
+
+                        // 3. 생존한 엔티티의 인라인 서브 렌더러(InlineSubRendererComponent) 컬럼을 펼쳐 드로우 패킷 생성
                         uint32_t readIdx = 0;
                         for (auto* chunk : chunks) {
-                            auto* transforms = g_ECS->GetComponentArray<Endfield::TransformComponent>(chunk, Endfield::BIT_TRANSFORM);
-                            auto* meshes     = g_ECS->GetComponentArray<Endfield::MeshComponent>(chunk, Endfield::BIT_MESH);
-                            auto* visColumn  = g_ECS->GetComponentArray<uint32_t>(chunk, Endfield::BIT_VISIBILITY);
+                            auto* transforms   = g_ECS->GetComponentArray<Endfield::TransformComponent>(chunk, Endfield::BIT_TRANSFORM);
+                            auto* subRenderers = g_ECS->GetComponentArray<Endfield::InlineSubRendererComponent>(chunk, Endfield::BIT_SUB_RENDERERS);
+                            auto* meshes       = g_ECS->GetComponentArray<Endfield::MeshComponent>(chunk, Endfield::BIT_MESH);
+                            auto* visColumn    = g_ECS->GetComponentArray<uint32_t>(chunk, Endfield::BIT_VISIBILITY);
 
-                            if (!transforms || !meshes) continue;
+                            if (!transforms) continue;
 
                             for (uint32_t i = 0; i < chunk->entityCount; ++i, ++readIdx) {
                                 uint32_t vis = enableFrustum ? visMasks[readIdx] : 1u;
@@ -325,34 +357,68 @@ ENDFIELD_API void ExecuteNativeRenderLoop()
                                     visColumn[i] = vis;
                                 }
 
-                                // 카메라별 비트 연산 한 번으로 가시성 판별
-                                if ((vis & (1u << 0)) != 0u) {
-                                    Endfield::VulkanBackend::InstanceData inst;
-                                    for (int k = 0; k < 16; ++k) {
-                                        inst.mvpMatrix[k] = transforms[i].localToWorld[k];
+                                // [경로 A] InlineSubRendererComponent(19개 서브메시 인라인 배열)가 존재하는 아키타입
+                                if (subRenderers != nullptr && subRenderers[i].subMeshCount > 0) {
+                                    const auto& subComp = subRenderers[i];
+                                    uint32_t subCount = subComp.subMeshCount;
+                                    totalSubMeshDraws += subCount;
+
+                                    if ((vis & (1u << 0)) != 0u) {
+                                        float dx = transforms[i].localToWorld[12] + g_ViewMatrix[12];
+                                        float dy = transforms[i].localToWorld[13] + g_ViewMatrix[13];
+                                        float dz = transforms[i].localToWorld[14] + g_ViewMatrix[14];
+                                        float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+
+                                        Endfield::VulkanBackend::InstanceData inst;
+                                        for (int k = 0; k < 16; ++k) {
+                                            inst.mvpMatrix[k] = transforms[i].localToWorld[k];
+                                        }
+
+                                        // 포인터 점프 없이 청크 인라인 배열에서 19개 서브메시 드로우콜 즉시 생성
+                                        for (uint32_t s = 0; s < subCount; ++s) {
+                                            inst.sortKey = Endfield::SortKeyBuilder::CreateOpaque(
+                                                0u,
+                                                1u,
+                                                subComp.materialIds[s],
+                                                dist,
+                                                Endfield::DEFAULT_MAX_SORT_DISTANCE,
+                                                static_cast<uint16_t>(subComp.meshId),
+                                                subComp.subMeshIndices[s]
+                                            );
+                                            inst.subMeshIndex = static_cast<uint32_t>(subComp.subMeshIndices[s]);
+                                            visibleInstances.push_back(inst);
+                                        }
+                                    } else {
+                                        culledFrustumDraws += subCount;
                                     }
+                                }
+                                // [경로 B] 단일 MeshComponent만 가진 일반 엔티티 폴백
+                                else if (meshes != nullptr) {
+                                    totalSubMeshDraws += 1;
+                                    if ((vis & (1u << 0)) != 0u) {
+                                        float dx = transforms[i].localToWorld[12] + g_ViewMatrix[12];
+                                        float dy = transforms[i].localToWorld[13] + g_ViewMatrix[13];
+                                        float dz = transforms[i].localToWorld[14] + g_ViewMatrix[14];
+                                        float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
 
-                                    // 뷰 공간 Z 깊이(거리) 근사 계산
-                                    float dx = transforms[i].localToWorld[12] + g_ViewMatrix[12];
-                                    float dy = transforms[i].localToWorld[13] + g_ViewMatrix[13];
-                                    float dz = transforms[i].localToWorld[14] + g_ViewMatrix[14];
-                                    float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
-
-                                    // 128-bit SortKey 생성 (Pass -> Pipeline -> Mesh/Submesh -> Material/Depth)
-                                    inst.sortKey = Endfield::SortKeyBuilder::CreateOpaque(
-                                        0u,                                              // passID
-                                        1u,                                              // pipelineID (PSO)
-                                        static_cast<uint16_t>(meshes[i].materialId),     // materialID
-                                        dist,                                            // distance
-                                        Endfield::DEFAULT_MAX_SORT_DISTANCE,
-                                        static_cast<uint16_t>(meshes[i].meshId),         // meshID
-                                        static_cast<uint16_t>(meshes[i].subMeshIndex)    // subMeshID
-                                    );
-                                    inst.subMeshIndex = static_cast<uint32_t>(meshes[i].subMeshIndex);
-
-                                    visibleInstances.push_back(inst);
-                                } else {
-                                    culledFrustum++;
+                                        Endfield::VulkanBackend::InstanceData inst;
+                                        for (int k = 0; k < 16; ++k) {
+                                            inst.mvpMatrix[k] = transforms[i].localToWorld[k];
+                                        }
+                                        inst.sortKey = Endfield::SortKeyBuilder::CreateOpaque(
+                                            0u,
+                                            1u,
+                                            static_cast<uint16_t>(meshes[i].materialId),
+                                            dist,
+                                            Endfield::DEFAULT_MAX_SORT_DISTANCE,
+                                            static_cast<uint16_t>(meshes[i].meshId),
+                                            static_cast<uint16_t>(meshes[i].subMeshIndex)
+                                        );
+                                        inst.subMeshIndex = static_cast<uint32_t>(meshes[i].subMeshIndex);
+                                        visibleInstances.push_back(inst);
+                                    } else {
+                                        culledFrustumDraws += 1;
+                                    }
                                 }
                             }
                         }
@@ -361,8 +427,8 @@ ENDFIELD_API void ExecuteNativeRenderLoop()
                     g_ECS->ReleaseWorkerReadFence();
                 }
 
-                stats.totalInstances = totalEntities;
-                stats.culledFrustum = culledFrustum;
+                stats.totalInstances   = totalSubMeshDraws;
+                stats.culledFrustum    = culledFrustumDraws;
                 stats.visibleInstances = static_cast<uint32_t>(visibleInstances.size());
 
                 if (!visibleInstances.empty()) {
@@ -401,7 +467,7 @@ ENDFIELD_API void RegisterEntity(uint32_t id, float* transformData)
 {
     if (g_ECS) {
         Endfield::ComponentMask mask;
-        mask.low = 1; // Transform 컴포넌트(Bit 0)를 가짐
+        mask.low = 1;
 
         Endfield::Entity ent = g_ECS->CreateEntity(mask);
         g_ECS->SetComponentData<float*>(ent, 0, transformData);
@@ -421,14 +487,6 @@ ENDFIELD_API void UpdateCameraState(float* viewMatrix, float* projMatrix)
         g_Backend->UpdateCamera(viewMatrix, projMatrix);
     }
 }
-
-struct SpawnTemplateData {
-    Endfield::TransformComponent t;
-    Endfield::BoundsComponent b;
-    Endfield::MeshComponent m;
-};
-static std::vector<SpawnTemplateData> g_SpawnTemplates;
-static uint32_t g_SpawnTemplateSize = 1;
 
 ENDFIELD_API void LoadNativeScene(const char* path)
 {
@@ -457,8 +515,7 @@ ENDFIELD_API void LoadNativeScene(const char* path)
             for (const auto& t : templates) {
                 g_SpawnTemplates.push_back({t.transform, t.bounds, t.mesh});
             }
-            g_SpawnTemplateSize = static_cast<uint32_t>(g_SpawnTemplates.size());
-            Endfield::VulkanBackend::LogToUnity("[PluginAPI] Scene loaded and " + std::to_string(g_SpawnTemplates.size()) + " templates cached for spawning.");
+            Endfield::VulkanBackend::LogToUnity("[PluginAPI] Scene loaded and " + std::to_string(g_SpawnTemplates.size()) + " submesh templates cached into InlineSubRendererComponent.");
         }
     }
 }
@@ -466,7 +523,7 @@ ENDFIELD_API void LoadNativeScene(const char* path)
 ENDFIELD_API void SpawnNativeInstances(int count, float spread)
 {
     std::lock_guard<std::mutex> lock(g_NativeMutex);
-    if (!g_ECS) return;
+    if (!g_ECS || count <= 0) return;
 
     if (g_SpawnTemplates.empty()) {
         Endfield::ComponentMask mask;
@@ -485,61 +542,64 @@ ENDFIELD_API void SpawnNativeInstances(int count, float spread)
     }
 
     if (g_SpawnTemplates.empty()) return;
-    g_SpawnTemplateSize = static_cast<uint32_t>(g_SpawnTemplates.size());
+
+    // 19개 서브메시 템플릿을 1개의 InlineSubRendererComponent로 병합
+    Endfield::TransformComponent baseTransform{};
+    Endfield::BoundsComponent combinedBounds{};
+    Endfield::InlineSubRendererComponent inlineSub{};
+    BuildInlineCharacterTemplate(baseTransform, combinedBounds, inlineSub);
 
     g_ECS->Clear();
 
+    // 캐릭터 1개당 1개의 엔티티만 생성하며, 19개 서브메시는 청크 인라인 컬럼(BIT_SUB_RENDERERS)에 수납
     Endfield::ComponentMask mask;
-    mask.low = Endfield::MASK_STANDARD_RENDER | Endfield::MASK_VISIBILITY;
+    mask.low = Endfield::MASK_TRANSFORM | Endfield::MASK_BOUNDS | Endfield::MASK_SUB_RENDERERS | Endfield::MASK_VISIBILITY;
 
     for (int i = 0; i < count; ++i) {
         float offsetX = ((float)rand() / RAND_MAX) * spread - (spread * 0.5f);
         float offsetZ = ((float)rand() / RAND_MAX) * spread - (spread * 0.5f);
 
-        for (auto& tpl : g_SpawnTemplates) {
-            Endfield::TransformComponent newT = tpl.t;
-            Endfield::BoundsComponent newB = tpl.b;
-            
-            newT.localToWorld[12] += offsetX;
-            newT.localToWorld[14] += offsetZ;
+        Endfield::TransformComponent newT = baseTransform;
+        Endfield::BoundsComponent newB = combinedBounds;
+        
+        newT.localToWorld[12] += offsetX;
+        newT.localToWorld[14] += offsetZ;
 
-            newB.minBounds[0] += offsetX;
-            newB.minBounds[2] += offsetZ;
-            newB.maxBounds[0] += offsetX;
-            newB.maxBounds[2] += offsetZ;
+        newB.minBounds[0] += offsetX;
+        newB.minBounds[2] += offsetZ;
+        newB.maxBounds[0] += offsetX;
+        newB.maxBounds[2] += offsetZ;
 
-            Endfield::Entity ent = g_ECS->CreateEntity(mask);
-            g_ECS->SetComponentData(ent, Endfield::BIT_TRANSFORM, newT);
-            g_ECS->SetComponentData(ent, Endfield::BIT_BOUNDS, newB);
-            g_ECS->SetComponentData(ent, Endfield::BIT_MESH, tpl.m);
-        }
+        Endfield::Entity ent = g_ECS->CreateEntity(mask);
+        g_ECS->SetComponentData(ent, Endfield::BIT_TRANSFORM,     newT);
+        g_ECS->SetComponentData(ent, Endfield::BIT_BOUNDS,        newB);
+        g_ECS->SetComponentData(ent, Endfield::BIT_SUB_RENDERERS, inlineSub);
     }
 }
 
 ENDFIELD_API void AnimateNativeInstances(float time, float deltaTime)
 {
     std::lock_guard<std::mutex> lock(g_NativeMutex);
-    if (!g_ECS || g_SpawnTemplateSize == 0) return;
+    if (!g_ECS) return;
 
     Endfield::ComponentMask mask;
-    mask.low = Endfield::MASK_STANDARD_RENDER;
+    mask.low = Endfield::MASK_TRANSFORM | Endfield::MASK_BOUNDS;
     auto chunks = g_ECS->QueryChunks(mask);
 
     for (auto chunk : chunks) {
         auto* transforms = g_ECS->GetComponentArray<Endfield::TransformComponent>(chunk, Endfield::BIT_TRANSFORM);
-        auto* bounds = g_ECS->GetComponentArray<Endfield::BoundsComponent>(chunk, Endfield::BIT_BOUNDS);
+        auto* bounds     = g_ECS->GetComponentArray<Endfield::BoundsComponent>(chunk, Endfield::BIT_BOUNDS);
         
         if (transforms && bounds) {
             for (uint32_t i = 0; i < chunk->entityCount; ++i) {
+                // 엔티티 1개 = 캐릭터 1개이므로 나눗셈 없이 entityId를 바로 고유 위상 오프셋으로 사용
                 uint32_t entityId = chunk->entityArray[i].id;
-                uint32_t groupId = entityId / g_SpawnTemplateSize;
+                float phaseOffset = static_cast<float>(entityId) * 0.1f;
 
-                float phaseOffset = static_cast<float>(groupId) * 0.1f;
                 float amplitude = 2.0f;
                 float deltaY = amplitude * cosf(time + phaseOffset) * deltaTime;
 
                 transforms[i].localToWorld[13] += deltaY;
-
                 bounds[i].minBounds[1] += deltaY;
                 bounds[i].maxBounds[1] += deltaY;
             }
