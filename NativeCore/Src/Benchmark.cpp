@@ -1,3 +1,4 @@
+#define NOMINMAX
 #include "Benchmark.h"
 #include "ECS.h"
 #include "Culling.h"
@@ -5,9 +6,13 @@
 #include "VulkanBackend.h"
 #include "ThreadPool.h"
 #include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <cstring>
 #include <iostream>
 #include <cstdlib>
+#include <limits>
+#include <vector>
 
 namespace Endfield {
 
@@ -50,17 +55,21 @@ NativeBenchmarkStats BenchmarkManager::GetLatestFrameStats() {
 void BenchmarkManager::RunHeadlessBenchmark(int instanceCount, int iterations, bool enableCulling, NativeBenchmarkStats* outAverages) {
     if (!outAverages || instanceCount <= 0 || iterations <= 0) return;
 
-    // 1. Prepare an isolated ECS Manager & Register components
+    // 1. 격리된 ECSManager 준비 및 컴포넌트 등록
     ECSManager ecs;
     ComponentRegistry::RegisterComponent(0, sizeof(float*));
-    ComponentRegistry::RegisterComponent(1, sizeof(TransformComponent));
-    ComponentRegistry::RegisterComponent(2, sizeof(BoundsComponent));
-    ComponentRegistry::RegisterComponent(3, sizeof(MeshComponent));
+    ComponentRegistry::RegisterComponent(BIT_TRANSFORM,     sizeof(TransformComponent));
+    ComponentRegistry::RegisterComponent(BIT_BOUNDS,        sizeof(BoundsComponent));
+    ComponentRegistry::RegisterComponent(BIT_MESH,          sizeof(MeshComponent));
+    ComponentRegistry::RegisterComponent(BIT_SUB_RENDERERS, sizeof(InlineSubRendererComponent));
+    ComponentRegistry::RegisterComponent(BIT_VISIBILITY,    sizeof(uint32_t));
 
     ComponentMask mask;
-    mask.low = MASK_STANDARD_RENDER;
+    mask.low = MASK_STANDARD_RENDER | MASK_VISIBILITY;
 
+    constexpr int SUBMESH_COUNT = 19;
     float spread = 300.0f;
+
     for (int i = 0; i < instanceCount; ++i) {
         Entity ent = ecs.CreateEntity(mask);
 
@@ -69,9 +78,8 @@ void BenchmarkManager::RunHeadlessBenchmark(int instanceCount, int iterations, b
         float z = (((float)rand() / RAND_MAX) - 0.5f) * spread;
 
         TransformComponent t{};
-        // Identity matrix with translation
-        t.localToWorld[0] = 1.0f;
-        t.localToWorld[5] = 1.0f;
+        t.localToWorld[0]  = 1.0f;
+        t.localToWorld[5]  = 1.0f;
         t.localToWorld[10] = 1.0f;
         t.localToWorld[15] = 1.0f;
         t.localToWorld[12] = x;
@@ -83,17 +91,16 @@ void BenchmarkManager::RunHeadlessBenchmark(int instanceCount, int iterations, b
         b.maxBounds[0] = x + 1.0f; b.maxBounds[1] = y + 1.0f; b.maxBounds[2] = z + 1.0f;
 
         MeshComponent m{};
-        m.meshId = i % 4;
-        m.subMeshIndex = 0;
-        m.materialId = (i / 4) % 16;
+        m.meshId       = 0;                 // 원본 캐릭터 메시 1세트 공유 시나리오
+        m.subMeshIndex = i % SUBMESH_COUNT; // 19개 서브메시 분포
+        m.materialId   = i % SUBMESH_COUNT; // 19개 서브메시별 머티리얼
 
-        ecs.SetComponentData(ent, 1, t);
-        ecs.SetComponentData(ent, 2, b);
-        ecs.SetComponentData(ent, 3, m);
+        ecs.SetComponentData(ent, BIT_TRANSFORM, t);
+        ecs.SetComponentData(ent, BIT_BOUNDS,    b);
+        ecs.SetComponentData(ent, BIT_MESH,      m);
     }
 
-    // 2. Setup standard Camera Frustum
-    // Looking from (0, 50, -150) towards (0, 0, 0)
+    // 2. 카메라 프러스텀 및 15개 워커 스레드 풀 / 컬링 시스템 초기화
     float vp[16] = {
         1.3f, 0.0f, 0.0f, 0.0f,
         0.0f, 2.4f, 0.0f, 0.0f,
@@ -103,134 +110,263 @@ void BenchmarkManager::RunHeadlessBenchmark(int instanceCount, int iterations, b
     Frustum frustum;
     frustum.ExtractFromMatrix(vp);
 
-    unsigned int numThreads = std::thread::hardware_concurrency();
-    if (numThreads == 0) numThreads = 4;
-    ThreadPool threadPool(numThreads);
+    unsigned int hwThreads = std::thread::hardware_concurrency();
+    unsigned int numWorkers = (hwThreads > 1) ? (hwThreads - 1) : 4; // 15 Workers + 1 Main/Render Thread
+    ThreadPool threadPool(numWorkers);
 
+    CullingSystem cullingSys;
+    cullingSys.Initialize(numWorkers, &threadPool, false);
+
+    const bool runOcclusion = enableCulling && m_EnableOcclusion;
     NativeBenchmarkStats accumStats{};
 
-    // 3. Execution loops
+    struct alignas(16) SimInstance {
+        float mvpMatrix[16];
+        SortKey sortKey;
+        uint32_t subMeshIndex;
+        uint32_t _pad[3];
+    };
+
+    // 3. 반복 측정 루프
     for (int iter = 0; iter < iterations; ++iter) {
         auto iterStart = std::chrono::high_resolution_clock::now();
         NativeBenchmarkStats iterStats{};
         iterStats.totalInstances = static_cast<uint32_t>(instanceCount);
 
-        // [Phase 1: ECS Query & Data Access]
+        // [Phase 1: ECS Query & SoA Chunk Access]
         std::vector<Chunk*> chunks;
         {
             ScopedTimer timer(&iterStats.ecsQueryTimeMs);
             chunks = ecs.QueryChunks(mask);
         }
 
-        // [Phase 2: Parallel Frustum Culling & Instance Assembly]
-        struct SimInstance {
-            float mvpMatrix[16];
-            SortKey sortKey;
-            uint32_t subMeshIndex;
-        };
-        std::vector<SimInstance> visibleList;
-        visibleList.reserve(instanceCount);
-
+        // [Phase 2: 15-Worker Multi-View Frustum Culling & Chunk AABB Pre-Culling]
+        std::vector<SimInstance> frustumSurvivors;
+        frustumSurvivors.reserve(instanceCount);
         uint32_t culledFrustumCount = 0;
+
         {
             ScopedTimer timer(&iterStats.frustumCullingTimeMs);
+            ecs.AcquireWorkerReadFence();
 
+            constexpr uint32_t CULL_BATCH_SIZE = 256;
+            uint32_t numCullChunks = (static_cast<uint32_t>(instanceCount) + CULL_BATCH_SIZE - 1) / CULL_BATCH_SIZE;
+
+            std::vector<AABB> entityAABBs(instanceCount);
+            std::vector<AABB> chunkAABBs(numCullChunks);
+
+            for (uint32_t c = 0; c < numCullChunks; ++c) {
+                chunkAABBs[c].minBounds[0] = std::numeric_limits<float>::max();
+                chunkAABBs[c].minBounds[1] = std::numeric_limits<float>::max();
+                chunkAABBs[c].minBounds[2] = std::numeric_limits<float>::max();
+                chunkAABBs[c].maxBounds[0] = std::numeric_limits<float>::lowest();
+                chunkAABBs[c].maxBounds[1] = std::numeric_limits<float>::lowest();
+                chunkAABBs[c].maxBounds[2] = std::numeric_limits<float>::lowest();
+            }
+
+            uint32_t writeIdx = 0;
             for (auto* chunk : chunks) {
-                auto* transforms = ecs.GetComponentArray<TransformComponent>(chunk, BIT_TRANSFORM);
                 auto* bounds = ecs.GetComponentArray<BoundsComponent>(chunk, BIT_BOUNDS);
-                auto* meshes = ecs.GetComponentArray<MeshComponent>(chunk, BIT_MESH);
-
-                if (!transforms || !bounds || !meshes) continue;
+                if (!bounds) continue;
 
                 for (uint32_t i = 0; i < chunk->entityCount; ++i) {
-                    AABB aabb = {
-                        {bounds[i].minBounds[0], bounds[i].minBounds[1], bounds[i].minBounds[2]},
-                        {bounds[i].maxBounds[0], bounds[i].maxBounds[1], bounds[i].maxBounds[2]}
+                    AABB box = {
+                        { bounds[i].minBounds[0], bounds[i].minBounds[1], bounds[i].minBounds[2] },
+                        { bounds[i].maxBounds[0], bounds[i].maxBounds[1], bounds[i].maxBounds[2] }
                     };
+                    entityAABBs[writeIdx] = box;
 
-                    bool isInside = true;
-                    if (enableCulling) {
-                        isInside = frustum.Intersects(aabb);
+                    uint32_t batchIdx = writeIdx / CULL_BATCH_SIZE;
+                    for (int axis = 0; axis < 3; ++axis) {
+                        chunkAABBs[batchIdx].minBounds[axis] = (std::min)(chunkAABBs[batchIdx].minBounds[axis], box.minBounds[axis]);
+                        chunkAABBs[batchIdx].maxBounds[axis] = (std::max)(chunkAABBs[batchIdx].maxBounds[axis], box.maxBounds[axis]);
                     }
+                    writeIdx++;
+                }
+            }
 
-                    if (isInside) {
-                        SimInstance inst;
+            std::vector<uint32_t> visMasks;
+            if (enableCulling) {
+                cullingSys.PerformMultiViewFrustumCullingParallel(
+                    &frustum,
+                    1,
+                    chunkAABBs.data(),
+                    CULL_BATCH_SIZE,
+                    entityAABBs,
+                    visMasks
+                );
+            }
+
+            uint32_t readIdx = 0;
+            for (auto* chunk : chunks) {
+                auto* transforms = ecs.GetComponentArray<TransformComponent>(chunk, BIT_TRANSFORM);
+                auto* meshes     = ecs.GetComponentArray<MeshComponent>(chunk, BIT_MESH);
+                auto* visColumn  = ecs.GetComponentArray<uint32_t>(chunk, BIT_VISIBILITY);
+
+                if (!transforms || !meshes) continue;
+
+                for (uint32_t i = 0; i < chunk->entityCount; ++i, ++readIdx) {
+                    uint32_t vis = enableCulling ? visMasks[readIdx] : 1u;
+                    if (visColumn) visColumn[i] = vis;
+
+                    if ((vis & (1u << 0)) != 0u) {
+                        SimInstance inst{};
                         for (int k = 0; k < 16; ++k) inst.mvpMatrix[k] = transforms[i].localToWorld[k];
-                        
-                        // Calculate depth from camera
+
                         float dx = transforms[i].localToWorld[12];
                         float dy = transforms[i].localToWorld[13] - 50.0f;
                         float dz = transforms[i].localToWorld[14] + 150.0f;
-                        float dist = std::sqrt(dx*dx + dy*dy + dz*dz);
+                        float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
 
-                        inst.sortKey = SortKeyBuilder::CreateOpaque(0, static_cast<uint16_t>(meshes[i].meshId), static_cast<uint16_t>(meshes[i].materialId), dist);
+                        inst.sortKey = SortKeyBuilder::CreateOpaque(
+                            0u,
+                            1u,
+                            static_cast<uint16_t>(meshes[i].materialId),
+                            dist,
+                            DEFAULT_MAX_SORT_DISTANCE,
+                            static_cast<uint16_t>(meshes[i].meshId),
+                            static_cast<uint16_t>(meshes[i].subMeshIndex)
+                        );
                         inst.subMeshIndex = static_cast<uint32_t>(meshes[i].subMeshIndex);
-                        visibleList.push_back(inst);
+                        frustumSurvivors.push_back(inst);
                     } else {
                         culledFrustumCount++;
                     }
                 }
             }
+
+            ecs.ReleaseWorkerReadFence();
         }
         iterStats.culledFrustum = culledFrustumCount;
+
+        // [3-Stage Software Occlusion Culling (선택 활성화 시)]
+        std::vector<SimInstance> visibleList;
+        if (runOcclusion && !frustumSurvivors.empty()) {
+            ScopedTimer timer(&iterStats.occlusionCullingTimeMs);
+
+            std::vector<OccluderMesh> proxyOccluders(1);
+            OccluderMesh& wall = proxyOccluders[0];
+            for (int q = 0; q < 4; ++q) {
+                float ox = (static_cast<float>(q) - 1.5f) * 35.0f;
+                float oz = (q % 2 == 0) ? -15.0f : 15.0f;
+                uint32_t baseVtx = static_cast<uint32_t>(wall.vertices.size());
+                wall.vertices.push_back({ ox - 14.0f, -5.0f, oz });
+                wall.vertices.push_back({ ox + 14.0f, -5.0f, oz });
+                wall.vertices.push_back({ ox + 14.0f, 18.0f, oz });
+                wall.vertices.push_back({ ox - 14.0f, 18.0f, oz });
+                wall.indices.insert(wall.indices.end(), {
+                    baseVtx + 0, baseVtx + 1, baseVtx + 2,
+                    baseVtx + 0, baseVtx + 2, baseVtx + 3,
+                    baseVtx + 0, baseVtx + 2, baseVtx + 1,
+                    baseVtx + 0, baseVtx + 3, baseVtx + 2
+                });
+            }
+            std::memset(wall.localToWorld, 0, sizeof(wall.localToWorld));
+            wall.localToWorld[0] = wall.localToWorld[5] = wall.localToWorld[10] = wall.localToWorld[15] = 1.0f;
+
+            cullingSys.BatchOccluders(proxyOccluders, vp, 1280.0f, 720.0f);
+            cullingSys.RasterizeTilesParallel(1280.0f, 720.0f);
+
+            std::vector<bool> occVis;
+            AABB defaultBounds = { {-1.0f, -1.0f, -1.0f}, {1.0f, 1.0f, 1.0f} };
+            cullingSys.PerformOcclusionTestParallel(
+                vp,
+                reinterpret_cast<const float*>(frustumSurvivors.data()),
+                static_cast<int>(frustumSurvivors.size()),
+                sizeof(SimInstance),
+                defaultBounds,
+                1280.0f,
+                720.0f,
+                occVis
+            );
+
+            visibleList.reserve(frustumSurvivors.size());
+            for (size_t i = 0; i < frustumSurvivors.size(); ++i) {
+                if (i < occVis.size() && occVis[i]) {
+                    visibleList.push_back(frustumSurvivors[i]);
+                }
+            }
+            iterStats.culledOcclusion = static_cast<uint32_t>(frustumSurvivors.size() - visibleList.size());
+        } else {
+            visibleList = std::move(frustumSurvivors);
+        }
+
         iterStats.visibleInstances = static_cast<uint32_t>(visibleList.size());
 
-        // [Phase 3: 64-bit SortKey Sorting]
+        // [Phase 3: 128-bit SortKey Branchless SIMD std::sort]
         {
             ScopedTimer timer(&iterStats.sortingTimeMs);
-            std::sort(visibleList.begin(), visibleList.end(), [](const SimInstance& a, const SimInstance& b) {
-                return a.sortKey < b.sortKey;
+            std::sort(visibleList.begin(), visibleList.end(), [](const SimInstance& a, const SimInstance& b) noexcept {
+                return SortKey::LessSIMD(a.sortKey, b.sortKey);
             });
         }
 
-        // [Phase 4: Parallel Worker Batching (0x7F7F7F7F Placeholder & Dynamic Buffer)]
+        // [Phase 4: 15-Worker Parallel Batching (0xF7F7F7F7 Sentinel & CAS Persistent Buffer Copy)]
         struct SimIntermediateCmd {
             uint32_t placeholder;
             uint32_t materialId;
             uint32_t meshId;
+            uint32_t dynamicOffset;
             SimInstance data;
         };
         std::vector<SimIntermediateCmd> intermediateCmds(visibleList.size());
-        const uint32_t PLACEHOLDER = 0x7F7F7F7F;
+        constexpr uint32_t PLACEHOLDER = 0xF7F7F7F7;
 
-        // Simulated dynamic buffer
         size_t dynamicAlign = 256;
         std::vector<uint8_t> simDynamicBuffer(visibleList.size() * dynamicAlign);
+        uint8_t* mappedPtr = simDynamicBuffer.data();
+        std::atomic<uint32_t> atomicWriteSlot{0u};
 
         {
             ScopedTimer timer(&iterStats.batchingTimeMs);
             int visibleCount = static_cast<int>(visibleList.size());
             if (visibleCount > 0) {
-                int chunkSize = (visibleCount + numThreads - 1) / numThreads;
+                int chunkSize = (visibleCount + static_cast<int>(numWorkers) - 1) / static_cast<int>(numWorkers);
 
-                for (unsigned int t = 0; t < numThreads; ++t) {
-                    int startIdx = t * chunkSize;
+                for (unsigned int t = 0; t < numWorkers; ++t) {
+                    int startIdx = static_cast<int>(t) * chunkSize;
                     int endIdx = (std::min)(visibleCount, startIdx + chunkSize);
                     if (startIdx >= endIdx) continue;
+                    uint32_t batchCount = static_cast<uint32_t>(endIdx - startIdx);
 
-                    threadPool.Enqueue([startIdx, endIdx, &visibleList, &intermediateCmds, PLACEHOLDER]() {
+                    threadPool.Enqueue([startIdx, endIdx, batchCount, &visibleList, &intermediateCmds, &atomicWriteSlot, mappedPtr, dynamicAlign, PLACEHOLDER]() {
+                        uint32_t claimedBaseSlot = atomicWriteSlot.load(std::memory_order_relaxed);
+                        while (!atomicWriteSlot.compare_exchange_weak(
+                            claimedBaseSlot,
+                            claimedBaseSlot + batchCount,
+                            std::memory_order_acq_rel,
+                            std::memory_order_relaxed))
+                        {
+                        }
+
                         for (int i = startIdx; i < endIdx; ++i) {
+                            uint32_t slotIdx = claimedBaseSlot + static_cast<uint32_t>(i - startIdx);
+                            uint32_t offset = slotIdx * static_cast<uint32_t>(dynamicAlign);
+
+                            // 워커 스레드가 CAS로 확보한 오프셋에 곧바로 memcpy
+                            std::memcpy(mappedPtr + offset, &visibleList[i], sizeof(SimInstance));
+
                             SimIntermediateCmd cmd;
-                            cmd.placeholder = PLACEHOLDER;
-                            cmd.materialId = visibleList[i].sortKey.materialID;
-                            cmd.meshId = visibleList[i].sortKey.pipelineID;
-                            cmd.data = visibleList[i];
+                            cmd.placeholder   = PLACEHOLDER;
+                            cmd.materialId    = visibleList[i].sortKey.materialID;
+                            cmd.meshId        = visibleList[i].sortKey.meshID;
+                            cmd.dynamicOffset = offset;
+                            cmd.data          = visibleList[i];
                             intermediateCmds[i] = cmd;
                         }
                     });
                 }
                 threadPool.WaitAll();
 
-                // Finalize: Redundant binding skip & Dynamic uniform buffer copy
-                uint32_t lastBoundMaterial = 0xFFFFFFFF;
+                // 싱글 렌더 스레드: 0xF7F7F7F7 센티넬 뒤채움(Backfill) 및 중복 바인드 생략
+                uint32_t lastBoundMaterial = 0xFFFFFFFFu;
                 for (int i = 0; i < visibleCount; ++i) {
-                    if (intermediateCmds[i].materialId != lastBoundMaterial) {
-                        intermediateCmds[i].placeholder = intermediateCmds[i].materialId;
-                        lastBoundMaterial = intermediateCmds[i].materialId;
+                    if (intermediateCmds[i].placeholder == PLACEHOLDER) {
+                        if (intermediateCmds[i].materialId != lastBoundMaterial) {
+                            lastBoundMaterial = intermediateCmds[i].materialId;
+                        }
+                        intermediateCmds[i].placeholder = lastBoundMaterial;
                     }
-                    // Copy to dynamic buffer offset
-                    size_t offset = i * dynamicAlign;
-                    memcpy(simDynamicBuffer.data() + offset, &intermediateCmds[i].data, sizeof(SimInstance));
                 }
             }
         }
@@ -253,6 +389,8 @@ void BenchmarkManager::RunHeadlessBenchmark(int instanceCount, int iterations, b
         accumStats.totalNativeFrameTimeMs += iterStats.totalNativeFrameTimeMs;
     }
 
+    cullingSys.Shutdown();
+
     // Average
     outAverages->totalInstances = accumStats.totalInstances;
     outAverages->visibleInstances = accumStats.visibleInstances / iterations;
@@ -268,4 +406,3 @@ void BenchmarkManager::RunHeadlessBenchmark(int instanceCount, int iterations, b
 }
 
 } // namespace Endfield
-
