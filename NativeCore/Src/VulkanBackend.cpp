@@ -2,7 +2,9 @@
 #include "RenderGraph.h"
 #include "Benchmark.h"
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
+#include <cstring>
 #include <fstream>
 #include <iostream>
 #include <limits>
@@ -45,8 +47,9 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(
 
 VulkanBackend::VulkanBackend()
 {
+    // 15개 워커 스레드 풀 + 1개 메인/싱글 렌더 스레드 분리
     unsigned int numThreads = std::thread::hardware_concurrency();
-    if (numThreads == 0) numThreads = 4;
+    numThreads = (numThreads > 1) ? (numThreads - 1) : 4;
     m_ThreadPool = std::make_unique<ThreadPool>(numThreads);
 }
 
@@ -290,14 +293,12 @@ void VulkanBackend::CreateLogicalDevice()
     }
 
     if (m_Surface == VK_NULL_HANDLE) {
-        // If no surface is provided, fallback to matching graphics queue for present queue
         m_PresentQueueFamilyIndex = m_GraphicsQueueFamilyIndex;
     }
 
     std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
     float queuePriority = 1.0f;
     
-    // Create unique queue families list
     std::vector<uint32_t> uniqueQueueFamilies = { m_GraphicsQueueFamilyIndex };
     if (m_GraphicsQueueFamilyIndex != m_PresentQueueFamilyIndex) {
         uniqueQueueFamilies.push_back(m_PresentQueueFamilyIndex);
@@ -317,7 +318,6 @@ void VulkanBackend::CreateLogicalDevice()
     deviceCreateInfo.queueCreateInfoCount = static_cast<uint32_t>(queueCreateInfos.size());
     deviceCreateInfo.pQueueCreateInfos = queueCreateInfos.data();
 
-    // Enable Device Extensions (e.g., Swapchain)
     const char* deviceExtensions[] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
     deviceCreateInfo.enabledExtensionCount = 1;
     deviceCreateInfo.ppEnabledExtensionNames = deviceExtensions;
@@ -501,7 +501,7 @@ void VulkanBackend::CreateRenderPass()
     colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR; // Ready for display
+    colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 
     VkAttachmentReference colorAttachmentRef{};
     colorAttachmentRef.attachment = 0;
@@ -566,7 +566,7 @@ void VulkanBackend::CreateFramebuffers()
     for (size_t i = 0; i < m_SwapchainImageViews.size(); i++) {
         std::vector<VkImageView> attachments = {
             m_SwapchainImageViews[i],
-            m_DepthImageView // Connect Depth image view
+            m_DepthImageView
         };
 
         VkFramebufferCreateInfo framebufferInfo{};
@@ -673,7 +673,9 @@ VkPipelineRasterizationStateCreateInfo VulkanBackend::CreateRasterizationStateIn
     info.polygonMode = VK_POLYGON_MODE_FILL;
     info.lineWidth = 1.0f;
     info.cullMode = VK_CULL_MODE_BACK_BIT;
-    info.frontFace = VK_FRONT_FACE_CLOCKWISE;
+    // 투영 행렬 Y축 부호 반전(proj[1][1] *= -1.0f)에 따른 Winding Order 보정
+    // (만약 vert.spv 내부에서 자체 Y반전을 수행하는 경우 VK_FRONT_FACE_CLOCKWISE로 변경)
+    info.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     info.depthBiasEnable = VK_FALSE;
     return info;
 }
@@ -722,8 +724,8 @@ void VulkanBackend::CreateGraphicsPipeline()
     VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
     vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     vertexInputInfo.vertexBindingDescriptionCount = 1;
-    vertexInputInfo.pVertexBindingDescriptions = &bindingDescription;
     vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size());
+    vertexInputInfo.pVertexBindingDescriptions = &bindingDescription;
     vertexInputInfo.pVertexAttributeDescriptions = attributeDescriptions.data();
 
     VkPipelineInputAssemblyStateCreateInfo inputAssembly = CreateInputAssemblyStateInfo();
@@ -823,10 +825,10 @@ void VulkanBackend::CreateDescriptorResources()
         throw std::runtime_error("[VulkanBackend ERROR] Failed to create descriptor set layout 0!");
     }
 
-    // --- 2. Descriptor Set Layout 1: Material (Dummy for now) ---
+    // --- 2. Descriptor Set Layout 1: Material ---
     VkDescriptorSetLayoutCreateInfo layoutInfo1{};
     layoutInfo1.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo1.bindingCount = 0; // Empty for now as simulated
+    layoutInfo1.bindingCount = 0;
 
     if (vkCreateDescriptorSetLayout(m_Device, &layoutInfo1, nullptr, &m_DescriptorSetLayout1_Material) != VK_SUCCESS) {
         throw std::runtime_error("[VulkanBackend ERROR] Failed to create descriptor set layout 1!");
@@ -850,11 +852,17 @@ void VulkanBackend::CreateDescriptorResources()
     }
 
     // --- Create Buffers ---
-    // Camera Buffer
-    CreateBuffer(sizeof(CameraUBO), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, m_CameraUniformBuffer, m_CameraUniformBufferMemory);
+    // Camera Buffer (Persistent Mapped)
+    CreateBuffer(
+        sizeof(CameraUBO),
+        VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+        m_CameraUniformBuffer,
+        m_CameraUniformBufferMemory
+    );
     vkMapMemory(m_Device, m_CameraUniformBufferMemory, 0, sizeof(CameraUBO), 0, &m_CameraUniformBufferMapped);
 
-    // Object Dynamic Buffer
+    // Object Dynamic Buffer (Persistent Mapped + Double Buffered across MAX_FRAMES_IN_FLIGHT)
     VkPhysicalDeviceProperties properties;
     vkGetPhysicalDeviceProperties(m_PhysicalDevice, &properties);
     size_t minAlignment = properties.limits.minUniformBufferOffsetAlignment;
@@ -864,15 +872,21 @@ void VulkanBackend::CreateDescriptorResources()
         m_DynamicAlignment = (m_DynamicAlignment + minAlignment - 1) & ~(minAlignment - 1);
     }
     
-    // Allocate space for up to MAX_DYNAMIC_OBJECTS objects
-    size_t dynamicBufferSize = MAX_DYNAMIC_OBJECTS * m_DynamicAlignment;
-    CreateBuffer(dynamicBufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, m_ObjectDynamicBuffer, m_ObjectDynamicBufferMemory);
+    // Frames in Flight(2)만큼 영구 매핑 버퍼 구간을 분리하여 WAR Hazard 방지
+    size_t dynamicBufferSize = static_cast<size_t>(MAX_FRAMES_IN_FLIGHT) * MAX_DYNAMIC_OBJECTS * m_DynamicAlignment;
+    CreateBuffer(
+        dynamicBufferSize,
+        VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+        m_ObjectDynamicBuffer,
+        m_ObjectDynamicBufferMemory
+    );
     vkMapMemory(m_Device, m_ObjectDynamicBufferMemory, 0, dynamicBufferSize, 0, &m_ObjectDynamicBufferMapped);
 
     // --- Descriptor Pool ---
     std::vector<VkDescriptorPoolSize> poolSizes = {
-        { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1 }, // Set 0
-        { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1 } // Set 2
+        { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1 },         // Set 0
+        { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1 }  // Set 2
     };
 
     VkDescriptorPoolCreateInfo poolInfo{};
@@ -926,7 +940,7 @@ void VulkanBackend::CreateDescriptorResources()
     VkDescriptorBufferInfo bufferInfoDesc2{};
     bufferInfoDesc2.buffer = m_ObjectDynamicBuffer;
     bufferInfoDesc2.offset = 0;
-    bufferInfoDesc2.range = sizeof(InstanceData); // Must be the size of the block, not the whole buffer
+    bufferInfoDesc2.range = sizeof(InstanceData);
 
     VkWriteDescriptorSet descriptorWrite2{};
     descriptorWrite2.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -949,7 +963,7 @@ void VulkanBackend::CreateSyncObjects()
 
     VkFenceCreateInfo fenceInfo{};
     fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-    fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT; // Initialize as signaled
+    fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
 
     m_ImageAvailableSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
     m_RenderFinishedSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
@@ -967,12 +981,10 @@ void VulkanBackend::CreateSyncObjects()
 
 void VulkanBackend::Shutdown()
 {
-    // Wait for the logical device to finish operations before cleaning up
     if (m_Device) {
         vkDeviceWaitIdle(m_Device);
         
         m_RenderGraph.Clear();
-
         m_CullingSystem.Shutdown();
 
         // 13. Sync Objects
@@ -1193,14 +1205,19 @@ void VulkanBackend::SetupRenderGraph()
 
 void VulkanBackend::UpdateCamera(float* viewMatrix, float* projMatrix)
 {
-    memcpy(m_ViewMatrix, viewMatrix, sizeof(float) * 16);
-    memcpy(m_ProjMatrix, projMatrix, sizeof(float) * 16);
+    // CPU 컬링(Frustum / Software Occlusion)은 Culling.cpp 내부에서 (1.0f - ndcY)로 화면 매핑하므로 원본 유지
+    std::memcpy(m_ViewMatrix, viewMatrix, sizeof(float) * 16);
+    std::memcpy(m_ProjMatrix, projMatrix, sizeof(float) * 16);
     
     if (m_CameraUniformBufferMapped) {
         CameraUBO ubo{};
-        memcpy(ubo.view, viewMatrix, sizeof(float) * 16);
-        memcpy(ubo.proj, projMatrix, sizeof(float) * 16);
-        memcpy(m_CameraUniformBufferMapped, &ubo, sizeof(CameraUBO));
+        std::memcpy(ubo.view, viewMatrix, sizeof(float) * 16);
+        std::memcpy(ubo.proj, projMatrix, sizeof(float) * 16);
+
+        // Unity(Y-Up) -> Vulkan(Y-Down) 투영 행렬 Y축 부호 반전 (proj[1][1] *= -1.0f)
+        ubo.proj[5] *= -1.0f;
+
+        std::memcpy(m_CameraUniformBufferMapped, &ubo, sizeof(CameraUBO));
     }
 }
 
@@ -1253,24 +1270,22 @@ bool VulkanBackend::BeginFrame()
 {
     if (m_Device == VK_NULL_HANDLE || m_Swapchain == VK_NULL_HANDLE) return false;
 
-    // Wait for the previous frame to finish
     vkWaitForFences(m_Device, 1, &m_InFlightFences[m_CurrentFrame], VK_TRUE, UINT64_MAX);
 
-    // Acquire next image from swapchain
-    VkResult acquireResult = vkAcquireNextImageKHR(m_Device, m_Swapchain, UINT64_MAX, m_ImageAvailableSemaphores[m_CurrentFrame], VK_NULL_HANDLE, &m_CurrentImageIndex);
+    VkResult acquireResult = vkAcquireNextImageKHR(
+        m_Device, m_Swapchain, UINT64_MAX,
+        m_ImageAvailableSemaphores[m_CurrentFrame], VK_NULL_HANDLE, &m_CurrentImageIndex
+    );
     if (acquireResult == VK_ERROR_OUT_OF_DATE_KHR) {
         RecreateSwapchain();
         return false;
     }
     
-    // Reset fence only after we successfully acquired the image!
     vkResetFences(m_Device, 1, &m_InFlightFences[m_CurrentFrame]);
 
-    // Reset and begin command buffer
     VkCommandBuffer cmdBuffer = m_CommandBuffers[m_CurrentFrame];
     vkResetCommandBuffer(cmdBuffer, 0);
 
-    // Clear pending batch data for the new frame
     m_PendingBatchData.clear();
 
     VkCommandBufferBeginInfo beginInfo{};
@@ -1280,20 +1295,13 @@ bool VulkanBackend::BeginFrame()
     if (vkBeginCommandBuffer(cmdBuffer, &beginInfo) != VK_SUCCESS) {
         throw std::runtime_error("[VulkanBackend ERROR] Failed to begin recording command buffer!");
     }
-    
-    // 렌더 패스 시작 및 렌더링 명령어는 이제 RenderGraph가 EndFrame 시점에 일괄 처리합니다.
-    // 여기서는 커맨드 버퍼 기록 준비(Begin)만 수행합니다.
 
-    // Reset our redundant binding tracker for the new frame (for SubmitBatch)
     m_LastBoundMaterialSet = 0xFFFFFFFF;
     return true;
 }
 
 void VulkanBackend::SubmitBatch(const void* batchData, int instanceCount)
 {
-    // The instructions say "BeginFrame() -> SubmitBatch() -> EndFrame()".
-    // Since the actual draw logic is now managed by the Render Graph which runs in EndFrame(),
-    // we simply queue the batch data here.
     if (instanceCount == 0 || !batchData) return;
 
     const InstanceData* instances = static_cast<const InstanceData*>(batchData);
@@ -1309,21 +1317,17 @@ void VulkanBackend::ExecuteOpaqueDraws(VkCommandBuffer cmdBuffer)
 
     auto& benchmarkStats = BenchmarkManager::Instance().GetCurrentFrameStats();
 
-    // --- [-1] 소프트웨어 오클루전 컬링 (Software Occlusion Culling) ---
-    // 컬링을 가장 먼저 수행하여 화면에 보이지 않는 오브젝트를 제거합니다.
-    
-    // Compute VP Matrix
+    // --- [-1] 소프트웨어 오클루전 컬링 3단계 (Phase 1 ~ Phase 3) ---
     float vp[16];
     for (int c = 0; c < 4; ++c) {
         for (int r = 0; r < 4; ++r) {
-            vp[c * 4 + r] = 0;
+            vp[c * 4 + r] = 0.0f;
             for (int k = 0; k < 4; ++k) {
                 vp[c * 4 + r] += m_ProjMatrix[k * 4 + r] * m_ViewMatrix[c * 4 + k];
             }
         }
     }
 
-    // 오클루전 컬링
     std::vector<bool> visibilityResults(instanceCount, true);
 
     if (BenchmarkManager::Instance().IsOcclusionCullingEnabled()) {
@@ -1332,15 +1336,40 @@ void VulkanBackend::ExecuteOpaqueDraws(VkCommandBuffer cmdBuffer)
         float screenW = static_cast<float>(m_SwapchainExtent.width);
         float screenH = static_cast<float>(m_SwapchainExtent.height);
 
-        // Phase 1: 오클루더 대리 메시(Proxy Quad) SIMD 배치
-        std::vector<OccluderMesh> proxyOccluders;
+        // [Phase 1] 오클루더 대리 메시(Proxy Quad) 4-Wide SIMD 배치
+        // 4-Wide SSE 루프가 온전히 구동되도록 4개의 대형 차폐 벽(양면 삼각형 16개)을 구성
+        std::vector<OccluderMesh> proxyOccluders(1);
+        OccluderMesh& wallCluster = proxyOccluders[0];
+        for (int q = 0; q < 4; ++q) {
+            float offsetX = (static_cast<float>(q) - 1.5f) * 35.0f;
+            float offsetZ = (q % 2 == 0) ? -15.0f : 15.0f;
+            uint32_t baseVtx = static_cast<uint32_t>(wallCluster.vertices.size());
+
+            wallCluster.vertices.push_back({ offsetX - 14.0f, -5.0f, offsetZ });
+            wallCluster.vertices.push_back({ offsetX + 14.0f, -5.0f, offsetZ });
+            wallCluster.vertices.push_back({ offsetX + 14.0f, 18.0f, offsetZ });
+            wallCluster.vertices.push_back({ offsetX - 14.0f, 18.0f, offsetZ });
+
+            // 양면(Front/Back) 삼각형 4개 등록 -> 총 4 * 4 = 16개 삼각형 (4-Wide SIMD 4회 반복)
+            wallCluster.indices.insert(wallCluster.indices.end(), {
+                baseVtx + 0, baseVtx + 1, baseVtx + 2,
+                baseVtx + 0, baseVtx + 2, baseVtx + 3,
+                baseVtx + 0, baseVtx + 2, baseVtx + 1,
+                baseVtx + 0, baseVtx + 3, baseVtx + 2
+            });
+        }
+        std::memset(wallCluster.localToWorld, 0, sizeof(wallCluster.localToWorld));
+        wallCluster.localToWorld[0]  = 1.0f;
+        wallCluster.localToWorld[5]  = 1.0f;
+        wallCluster.localToWorld[10] = 1.0f;
+        wallCluster.localToWorld[15] = 1.0f;
+
         m_CullingSystem.BatchOccluders(proxyOccluders, vp, screenW, screenH);
 
-        // Phase 2 & 3-A: 4x2 타일 비닝 및 8개 타일 락프리 래스터화
+        // [Phase 2 & 3-A] 4x2 타일 비닝(32개 리스트) 및 8개 잡 락프리 타일 래스터화
         m_CullingSystem.RasterizeTilesParallel(screenW, screenH);
 
-        // Phase 3-B: 인스턴스 AABB 화면 투영 및 4-Wide SIMD Hi-Z 깊이 비교
-        // InstanceData::mvpMatrix가 이미 MVP이거나 Model 행렬인 경우에 맞춰 전달
+        // [Phase 3-B] 생존 엔티티 AABB 4-Wide SIMD Hi-Z 깊이 비교
         AABB defaultCharacterBounds = { {-1.0f, 0.0f, -1.0f}, {1.0f, 2.2f, 1.0f} };
         m_CullingSystem.PerformOcclusionTestParallel(
             vp,
@@ -1354,7 +1383,7 @@ void VulkanBackend::ExecuteOpaqueDraws(VkCommandBuffer cmdBuffer)
         );
     }
     
-    // --- [0] 128비트 정렬 키 및 Branchless SIMD std::sort
+    // --- [0] 128비트 정렬 키 필터링 및 Branchless SIMD std::sort ---
     m_SortedInstances.clear();
     m_SortedInstances.reserve(instanceCount);
     for (int i = 0; i < instanceCount; ++i) {
@@ -1364,11 +1393,11 @@ void VulkanBackend::ExecuteOpaqueDraws(VkCommandBuffer cmdBuffer)
     }
 
     benchmarkStats.visibleInstances = static_cast<uint32_t>(m_SortedInstances.size());
-    benchmarkStats.culledOcclusion = static_cast<uint32_t>(instanceCount - m_SortedInstances.size());
+    benchmarkStats.culledOcclusion = static_cast<uint32_t>(instanceCount - static_cast<int>(m_SortedInstances.size()));
 
     {
         ScopedTimer timer(&benchmarkStats.sortingTimeMs);
-        // SSE2 _mm_load_si128 + _mm_cmpgt_epi32 + _mm_movemask_ps 기반 분기 없는(Branchless) 비교자 주입
+        // SSE2 _mm_load_si128 + _mm_cmpgt_epi32 + _mm_movemask_ps 기반 Branchless 비교자 주입
         std::sort(m_SortedInstances.begin(), m_SortedInstances.end(),
             [](const InstanceData& a, const InstanceData& b) noexcept {
                 return SortKey::LessSIMD(a.sortKey, b.sortKey);
@@ -1383,10 +1412,10 @@ void VulkanBackend::ExecuteOpaqueDraws(VkCommandBuffer cmdBuffer)
                                 m_PipelineLayout, 0, 1, &m_DescriptorSet0_Pass, 0, nullptr);
     }
 
-    // --- [1] 워커 스레드 병렬 BatchData 생성 & 센티넬 마커(0x7F7F7F7F) 기록
+    // --- [1] 15개 워커 스레드 병렬 BatchData 생성, CAS 영구 매핑 버퍼 직결 복사 & 0xF7F7F7F7 센티넬 기록 ---
     int visibleCount = static_cast<int>(m_SortedInstances.size());
-    if (visibleCount > MAX_DYNAMIC_OBJECTS) {
-        visibleCount = MAX_DYNAMIC_OBJECTS;
+    if (visibleCount > static_cast<int>(MAX_DYNAMIC_OBJECTS)) {
+        visibleCount = static_cast<int>(MAX_DYNAMIC_OBJECTS);
         LogToUnity("[VulkanBackend WARNING] Too many instances! Truncated to " + std::to_string(MAX_DYNAMIC_OBJECTS) + ".");
     }
 
@@ -1395,6 +1424,13 @@ void VulkanBackend::ExecuteOpaqueDraws(VkCommandBuffer cmdBuffer)
     if (m_IntermediateCmds.size() < static_cast<size_t>(visibleCount)) {
         m_IntermediateCmds.resize(visibleCount);
     }
+
+    // 각 정렬된 드로우콜(i)이 CAS로 할당받은 실제 GPU 동적 버퍼 오프셋을 저장
+    std::vector<uint32_t> dynamicOffsets(visibleCount, 0u);
+    std::atomic<uint32_t> atomicWriteSlot{0u};
+
+    // 현재 In-Flight 프레임 전용 버퍼 구간 시작 오프셋 (더블 버퍼링 WAR Hazard 방지)
+    const uint32_t frameBaseOffset = m_CurrentFrame * MAX_DYNAMIC_OBJECTS * static_cast<uint32_t>(m_DynamicAlignment);
     constexpr uint32_t SENTINEL_MARKER = 0xF7F7F7F7;
 
     unsigned int numThreads = std::thread::hardware_concurrency();
@@ -1411,28 +1447,41 @@ void VulkanBackend::ExecuteOpaqueDraws(VkCommandBuffer cmdBuffer)
         for (unsigned int t = 0; t < numThreads; ++t) {
             int startIdx = static_cast<int>(t) * chunkSize;
             int endIdx = (t == numThreads - 1) ? visibleCount : startIdx + chunkSize;
+            uint32_t batchCount = static_cast<uint32_t>(endIdx - startIdx);
 
-            m_ThreadPool->Enqueue([startIdx, endIdx, sortedInstances, this, SENTINEL_MARKER]() {
+            m_ThreadPool->Enqueue([startIdx, endIdx, batchCount, frameBaseOffset, sortedInstances, &atomicWriteSlot, &dynamicOffsets, this, SENTINEL_MARKER]() {
+                // CAS(compare_exchange_weak)로 영구 매핑 GPU 버퍼 오프셋 구간을 원자적으로 확보
+                uint32_t claimedBaseSlot = atomicWriteSlot.load(std::memory_order_relaxed);
+                while (!atomicWriteSlot.compare_exchange_weak(
+                    claimedBaseSlot,
+                    claimedBaseSlot + batchCount,
+                    std::memory_order_acq_rel,
+                    std::memory_order_relaxed))
+                {
+                    // CAS retry
+                }
+
                 for (int i = startIdx; i < endIdx; ++i) {
                     const InstanceData& data = sortedInstances[i];
                     IntermediateDrawCmd cmd;
 
-                    // 워커는 직전 드로우의 디스크립터 셋 상태를 알 수 없으므로 0xF7F7F7F7 센티넬 마커를 기입
+                    // 워커는 직전 드로우의 디스크립터 셋 상태를 알 수 없으므로 0xF7F7F7F7 센티넬 마커 기입
                     cmd.descriptorSetPlaceholder = SENTINEL_MARKER;
                     cmd.materialID = data.sortKey.materialID;
-                    // 128비트 키의 meshID 우선 사용 (기존 64비트 씬 호환을 위해 0일 경우 pipelineID 폴백)
                     cmd.meshId = (data.sortKey.meshID != 0) ? data.sortKey.meshID : data.sortKey.pipelineID;
                     cmd.subMeshIdx = data.subMeshIndex;
                     cmd.data = data;
 
-                    // 워커 스레드가 자기 슬롯 오프셋의 영구 매핑(Persistent Mapped) GPU 버퍼에 직접 memcpy
-                    uint32_t dynamicOffset = static_cast<uint32_t>(i) * static_cast<uint32_t>(this->m_DynamicAlignment);
+                    // CAS로 확보한 영구 매핑(Persistent Mapped) GPU 버퍼 주소로 곧바로 직결 memcpy
+                    uint32_t slotIndex = claimedBaseSlot + static_cast<uint32_t>(i - startIdx);
+                    uint32_t dynamicOffset = frameBaseOffset + slotIndex * static_cast<uint32_t>(this->m_DynamicAlignment);
                     std::memcpy(
-                         static_cast<char*>(this->m_ObjectDynamicBufferMapped) + dynamicOffset,
-                         &data,
-                         sizeof(InstanceData)
+                        static_cast<char*>(this->m_ObjectDynamicBufferMapped) + dynamicOffset,
+                        &data,
+                        sizeof(InstanceData)
                     );
 
+                    dynamicOffsets[i] = dynamicOffset;
                     this->m_IntermediateCmds[i] = cmd;
                 }
             });
@@ -1447,7 +1496,7 @@ void VulkanBackend::ExecuteOpaqueDraws(VkCommandBuffer cmdBuffer)
         for (int i = 0; i < visibleCount; ++i) {
             IntermediateDrawCmd& cmd = m_IntermediateCmds[i];
 
-            // 1) Set 1 (Material): 센티넬 마커(0xF7F7F7F7) 뒤채움 및 중복 바인드 생략
+            // 1) Set 1 (Material): 센티넬 마커(0xF7F7F7F7) 발견 시 직전 핸들로 뒤채움 및 중복 바인드 생략
             if (cmd.descriptorSetPlaceholder == SENTINEL_MARKER) {
                 if (cmd.materialID != lastBoundMaterialSet) {
                     lastBoundMaterialSet = cmd.materialID;
@@ -1462,8 +1511,8 @@ void VulkanBackend::ExecuteOpaqueDraws(VkCommandBuffer cmdBuffer)
                 }
             }
 
-            // 2) Set 2 (Per-Draw Object): 단일 디스크립터 셋에 Dynamic Offset만 이동
-            uint32_t dynamicOffset = static_cast<uint32_t>(i) * static_cast<uint32_t>(m_DynamicAlignment);
+            // 2) Set 2 (Per-Draw Object): 단일 디스크립터 셋에 CAS로 기록된 Dynamic Offset만 이동
+            uint32_t dynamicOffset = dynamicOffsets[i];
             if (m_PipelineLayout != VK_NULL_HANDLE && m_DescriptorSet2_Object != VK_NULL_HANDLE) {
                 vkCmdBindDescriptorSets(cmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                         m_PipelineLayout, 2, 1, &m_DescriptorSet2_Object, 1, &dynamicOffset);
@@ -1544,7 +1593,6 @@ void VulkanBackend::EndFrame()
         throw std::runtime_error("[VulkanBackend ERROR] Failed to present swapchain image!");
     }
 
-    // Wait for presentation to complete to avoid swapchain semaphore reuse validation errors
     vkQueueWaitIdle(m_PresentQueue);
 
     m_CurrentFrame = (m_CurrentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
@@ -1639,11 +1687,6 @@ void VulkanBackend::CreateDepthResources() {
     }
 }
 
-} // namespace Endfield
-
-// ----- Buffer Helpers & Mesh Uploading -----
-namespace Endfield {
-
 void VulkanBackend::CreateBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkBuffer& buffer, VkDeviceMemory& bufferMemory) {
     VkBufferCreateInfo bufferInfo{};
     bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -1733,11 +1776,11 @@ void VulkanBackend::UploadMesh(const std::vector<Vertex>& vertices, const std::v
     VkBuffer stagingBuffer;
     VkDeviceMemory stagingBufferMemory;
 
-    // --- Vertex Buffer ---
+    // --- Vertex Buffer (VRAM 1세트 공유) ---
     CreateBuffer(vertexBufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
     void* data;
     vkMapMemory(m_Device, stagingBufferMemory, 0, vertexBufferSize, 0, &data);
-    memcpy(data, vertices.data(), (size_t)vertexBufferSize);
+    std::memcpy(data, vertices.data(), (size_t)vertexBufferSize);
     vkUnmapMemory(m_Device, stagingBufferMemory);
 
     CreateBuffer(vertexBufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, mesh.vertexBuffer, mesh.vertexBufferMemory);
@@ -1746,10 +1789,10 @@ void VulkanBackend::UploadMesh(const std::vector<Vertex>& vertices, const std::v
     vkDestroyBuffer(m_Device, stagingBuffer, nullptr);
     vkFreeMemory(m_Device, stagingBufferMemory, nullptr);
 
-    // --- Index Buffer ---
+    // --- Index Buffer (VRAM 1세트 공유) ---
     CreateBuffer(indexBufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
     vkMapMemory(m_Device, stagingBufferMemory, 0, indexBufferSize, 0, &data);
-    memcpy(data, combinedIndices.data(), (size_t)indexBufferSize);
+    std::memcpy(data, combinedIndices.data(), (size_t)indexBufferSize);
     vkUnmapMemory(m_Device, stagingBufferMemory);
 
     CreateBuffer(indexBufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, mesh.indexBuffer, mesh.indexBufferMemory);
