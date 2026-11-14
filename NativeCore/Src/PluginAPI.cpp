@@ -114,6 +114,7 @@ struct SpawnTemplateData {
     Endfield::MeshComponent m;
 };
 static std::vector<SpawnTemplateData> g_SpawnTemplates;
+static uint32_t g_SpawnTemplateSize = 1; // 캐릭터 1개를 구성하는 파츠 엔티티 개수
 
 struct InlinePartTemplate {
     Endfield::TransformComponent t;
@@ -121,7 +122,7 @@ struct InlinePartTemplate {
     Endfield::InlineSubRendererComponent inlineSub;
 };
 
-// 동일한 meshId를 가진 서브메시 템플릿끼리 묶어 원래의 스케일과 로컬 트랜스폼을 보존
+// 동일한 meshId와 로컬 트랜스폼을 가진 서브메시 템플릿끼리 인라인 병합
 static std::vector<InlinePartTemplate> BuildInlinePartTemplates()
 {
     std::vector<InlinePartTemplate> parts;
@@ -160,6 +161,45 @@ static std::vector<InlinePartTemplate> BuildInlinePartTemplates()
     return parts;
 }
 
+extern "C" {
+
+ENDFIELD_API void LoadNativeScene(const char* path)
+{
+    std::lock_guard<std::mutex> lock(g_NativeMutex);
+    if (g_ECS && path != nullptr && g_Backend) {
+        std::string filePath(path);
+        std::vector<Endfield::SceneLoader::MeshData> meshes;
+        std::vector<Endfield::SceneLoader::TemplateData> templates;
+        if (Endfield::SceneLoader::LoadScene(filePath, *g_ECS, meshes, templates)) {
+            for (size_t i = 0; i < meshes.size(); ++i) {
+                const auto& mesh = meshes[i];
+                std::vector<Endfield::VulkanBackend::Vertex> vkVertices;
+                vkVertices.reserve(mesh.vertices.size());
+                for (const auto& v : mesh.vertices) {
+                    vkVertices.push_back({v.posX, v.posY, v.posZ, v.normX, v.normY, v.normZ, v.uvX, v.uvY});
+                }
+                std::vector<std::vector<int32_t>> subMeshIndices;
+                subMeshIndices.reserve(mesh.subMeshes.size());
+                for (const auto& subMesh : mesh.subMeshes) {
+                    subMeshIndices.push_back(subMesh.indices);
+                }
+                g_Backend->UploadMesh(vkVertices, subMeshIndices, static_cast<uint32_t>(i));
+            }
+
+            g_SpawnTemplates.clear();
+            for (const auto& t : templates) {
+                g_SpawnTemplates.push_back({t.transform, t.bounds, t.mesh});
+            }
+
+            // 캐릭터 1개를 구성하는 인라인 파츠 개수 저장
+            auto partTemplates = BuildInlinePartTemplates();
+            g_SpawnTemplateSize = partTemplates.empty() ? 1u : static_cast<uint32_t>(partTemplates.size());
+
+            Endfield::VulkanBackend::LogToUnity("[PluginAPI] Scene loaded (" + std::to_string(g_SpawnTemplateSize) + " inline part entities per character).");
+        }
+    }
+}
+
 ENDFIELD_API void SpawnNativeInstances(int count, float spread)
 {
     std::lock_guard<std::mutex> lock(g_NativeMutex);
@@ -184,13 +224,18 @@ ENDFIELD_API void SpawnNativeInstances(int count, float spread)
     if (g_SpawnTemplates.empty()) return;
 
     std::vector<InlinePartTemplate> partTemplates = BuildInlinePartTemplates();
+    if (partTemplates.empty()) return;
+
+    // 캐릭터 1개당 생성되는 파츠 엔티티 개수를 기록해 애니메이션 위상을 동기화
+    g_SpawnTemplateSize = static_cast<uint32_t>(partTemplates.size());
+
     g_ECS->Clear();
 
     Endfield::ComponentMask mask;
     mask.low = Endfield::MASK_TRANSFORM | Endfield::MASK_BOUNDS | Endfield::MASK_SUB_RENDERERS | Endfield::MASK_VISIBILITY;
 
     for (int i = 0; i < count; ++i) {
-        // 첫 번째(i == 0) 인스턴스는 카메라 바로 앞 원본 위치(offset = 0)에 배치하여 가까이서 바로 보이도록 함
+        // 0번 캐릭터는 카메라 정면 원본 위치에 배치
         float offsetX = (i == 0) ? 0.0f : (((float)rand() / RAND_MAX) * spread - (spread * 0.5f));
         float offsetZ = (i == 0) ? 0.0f : (((float)rand() / RAND_MAX) * spread - (spread * 0.5f));
 
@@ -213,8 +258,6 @@ ENDFIELD_API void SpawnNativeInstances(int count, float spread)
         }
     }
 }
-
-extern "C" {
 
 ENDFIELD_API void InitializeVulkanRenderer(void* windowHandle, uint32_t width, uint32_t height)
 {
@@ -558,42 +601,10 @@ ENDFIELD_API void UpdateCameraState(float* viewMatrix, float* projMatrix)
     }
 }
 
-ENDFIELD_API void LoadNativeScene(const char* path)
-{
-    std::lock_guard<std::mutex> lock(g_NativeMutex);
-    if (g_ECS && path != nullptr && g_Backend) {
-        std::string filePath(path);
-        std::vector<Endfield::SceneLoader::MeshData> meshes;
-        std::vector<Endfield::SceneLoader::TemplateData> templates;
-        if (Endfield::SceneLoader::LoadScene(filePath, *g_ECS, meshes, templates)) {
-            for (size_t i = 0; i < meshes.size(); ++i) {
-                const auto& mesh = meshes[i];
-                std::vector<Endfield::VulkanBackend::Vertex> vkVertices;
-                vkVertices.reserve(mesh.vertices.size());
-                for (const auto& v : mesh.vertices) {
-                    vkVertices.push_back({v.posX, v.posY, v.posZ, v.normX, v.normY, v.normZ, v.uvX, v.uvY});
-                }
-                std::vector<std::vector<int32_t>> subMeshIndices;
-                subMeshIndices.reserve(mesh.subMeshes.size());
-                for (const auto& subMesh : mesh.subMeshes) {
-                    subMeshIndices.push_back(subMesh.indices);
-                }
-                g_Backend->UploadMesh(vkVertices, subMeshIndices, static_cast<uint32_t>(i));
-            }
-
-            g_SpawnTemplates.clear();
-            for (const auto& t : templates) {
-                g_SpawnTemplates.push_back({t.transform, t.bounds, t.mesh});
-            }
-            Endfield::VulkanBackend::LogToUnity("[PluginAPI] Scene loaded and " + std::to_string(g_SpawnTemplates.size()) + " submesh templates cached into InlineSubRendererComponent.");
-        }
-    }
-}
-
 ENDFIELD_API void AnimateNativeInstances(float time, float deltaTime)
 {
     std::lock_guard<std::mutex> lock(g_NativeMutex);
-    if (!g_ECS) return;
+    if (!g_ECS || g_SpawnTemplateSize == 0) return;
 
     Endfield::ComponentMask mask;
     mask.low = Endfield::MASK_TRANSFORM | Endfield::MASK_BOUNDS;
@@ -605,12 +616,14 @@ ENDFIELD_API void AnimateNativeInstances(float time, float deltaTime)
         
         if (transforms && bounds) {
             for (uint32_t i = 0; i < chunk->entityCount; ++i) {
-                // 엔티티 1개 = 캐릭터 1개이므로 나눗셈 없이 entityId를 바로 고유 위상 오프셋으로 사용
+                // 엔티티 ID를 캐릭터당 파츠 개수(g_SpawnTemplateSize)로 나누어
+                // 같은 캐릭터에 속한 모든 파츠가 동일한 groupId와 phaseOffset을 갖도록 묶음
                 uint32_t entityId = chunk->entityArray[i].id;
-                float phaseOffset = static_cast<float>(entityId) * 0.1f;
+                uint32_t groupId  = entityId / g_SpawnTemplateSize;
 
-                float amplitude = 2.0f;
-                float deltaY = amplitude * cosf(time + phaseOffset) * deltaTime;
+                float phaseOffset = static_cast<float>(groupId) * 0.1f;
+                float amplitude   = 2.0f;
+                float deltaY      = amplitude * cosf(time + phaseOffset) * deltaTime;
 
                 transforms[i].localToWorld[13] += deltaY;
                 bounds[i].minBounds[1] += deltaY;
