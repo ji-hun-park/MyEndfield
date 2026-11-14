@@ -1440,14 +1440,14 @@ void VulkanBackend::ExecuteOpaqueDraws(VkCommandBuffer cmdBuffer)
 
         m_ThreadPool->WaitAll();
 
-        // --- [2] 싱글 렌더 스레드: 센티넬 뒤채움(Backfill) 및 클러스터 리바인드 생략
+        // --- [2] 싱글 렌더 스레드: 센티넬 뒤채움(Backfill) 및 클러스터 리바인드 생략 + 카운터 계측 ---
         uint32_t lastBoundMaterialSet = 0xFFFFFFFFu;
         uint32_t lastBoundMeshId      = 0xFFFFFFFFu;
 
         for (int i = 0; i < visibleCount; ++i) {
             IntermediateDrawCmd& cmd = m_IntermediateCmds[i];
 
-            // 1) 센티넬 마커(0x7F7F7F7F) 발견 시 직전 유효 핸들로 뒤채움(Backfill) 및 중복 바인드 생략
+            // 1) Set 1 (Material): 센티넬 마커(0x7F7F7F7F) 뒤채움 및 클러스터 리바인드 생략
             if (cmd.descriptorSetPlaceholder == SENTINEL_MARKER) {
                 if (cmd.materialID != lastBoundMaterialSet) {
                     lastBoundMaterialSet = cmd.materialID;
@@ -1458,7 +1458,6 @@ void VulkanBackend::ExecuteOpaqueDraws(VkCommandBuffer cmdBuffer)
                                                 m_PipelineLayout, 1, 1, &m_MaterialSets[cmd.materialID], 0, nullptr);
                     }
                 } else {
-                    // 직전 드로우와 동일한 머티리얼 클러스터: 뒤채움만 수행하고 vkCmdBindDescriptorSets(Set 1) 생략
                     cmd.descriptorSetPlaceholder = lastBoundMaterialSet;
                 }
             }
@@ -1470,7 +1469,7 @@ void VulkanBackend::ExecuteOpaqueDraws(VkCommandBuffer cmdBuffer)
                                         m_PipelineLayout, 2, 1, &m_DescriptorSet2_Object, 1, &dynamicOffset);
             }
 
-            // 3) 메시 버퍼 클러스터링: 직전 드로우와 동일한 원본 메시(meshId)면 Vertex/Index Buffer 리바인드 생략
+            // 3) 공유 원본 메시 버퍼(Vertex/Index): 동일 메시 클러스터 내부에서는 리바인드 생략
             if (cmd.meshId < m_Meshes.size()) {
                 MeshBuffer& mesh = m_Meshes[cmd.meshId];
                 if (mesh.vertexBuffer && mesh.indexBuffer && cmd.subMeshIdx < mesh.subMeshes.size()) {
