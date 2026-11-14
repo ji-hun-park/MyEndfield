@@ -330,20 +330,32 @@ void RenderGraph::Clear()
 void RenderGraph::Execute(VkCommandBuffer cmdBuffer)
 {
     for (const auto& pass : m_Passes) {
-        // [Chapter 3 - Slide 56, 57] 플러시당 단 1회의 vkCmdPipelineBarrier 호출로 모든 이미지 배리어 일괄 적용
+        // 플러시당 1회의 vkCmdPipelineBarrier 호출로 모든 이미지 배리어 일괄 적용
         auto it = m_PassBarriers.find(pass.name);
         if (it != m_PassBarriers.end() && cmdBuffer != VK_NULL_HANDLE) {
             const MergedBarrierGroup& group = it->second;
-            vkCmdPipelineBarrier(
-                cmdBuffer,
-                group.srcStageMask,
-                group.dstStageMask,
-                0,
-                0, nullptr,
-                0, nullptr,
-                static_cast<uint32_t>(group.imageBarriers.size()),
-                group.imageBarriers.data()
-            );
+
+            // 실제 물리적 VkImage 핸들이 바인딩된 배리어만 필터링하여 vkCmdPipelineBarrier 1회 호출
+            std::vector<VkImageMemoryBarrier> activeBarriers;
+            activeBarriers.reserve(group.imageBarriers.size());
+            for (const auto& b : group.imageBarriers) {
+                if (b.image != VK_NULL_HANDLE) {
+                    activeBarriers.push_back(b);
+                }
+            }
+
+            if (!activeBarriers.empty()) {
+                vkCmdPipelineBarrier(
+                    cmdBuffer,
+                    group.srcStageMask,
+                    group.dstStageMask,
+                    0,
+                    0, nullptr,
+                    0, nullptr,
+                    static_cast<uint32_t>(activeBarriers.size()),
+                    activeBarriers.data()
+                );
+            }
         }
 
         if (pass.boundDescriptorSet != VK_NULL_HANDLE && m_PipelineLayout != VK_NULL_HANDLE && cmdBuffer != VK_NULL_HANDLE) {

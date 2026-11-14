@@ -1152,14 +1152,13 @@ void VulkanBackend::SetupRenderGraph()
 {
     m_RenderGraph.Clear();
 
-    VkImage colorImg = !m_SwapchainImages.empty() ? m_SwapchainImages[0] : VK_NULL_HANDLE;
-    VkImage depthImg = m_DepthImage;
-
-    // 1. 영속 자원(Persistent)과 수명 기반 임시 자원(Transient) 분리 선언
-    m_RenderGraph.AddResource("GBufferColor", true,  AccessTag::None, colorImg);
-    m_RenderGraph.AddResource("GBufferDepth", true,  AccessTag::None, depthImg, m_DepthImageView);
-    m_RenderGraph.AddResource("ShadowMap",    false, AccessTag::None, depthImg); // Transient (Pass 0 ~ Pass 1)
-    m_RenderGraph.AddResource("PostTempRT",   false, AccessTag::None, colorImg); // Transient (Pass 2: ShadowMap 메모리 오프셋을 Aliasing 재활용)
+    // 스왑체인 이미지(m_SwapchainImages[m_CurrentImageIndex])와 Depth 첨부물의 레이아웃 전이는
+    // VkRenderPass(initialLayout -> finalLayout = PRESENT_SRC_KHR)가 프레임별 획득 인덱스에 맞춰 직접 수행하므로
+    // 논리적 패스 그래프에는 VK_NULL_HANDLE을 전달해 미획득 스왑체인 이미지에 대한 잘못된 배리어 호출을 방지함
+    m_RenderGraph.AddResource("GBufferColor", true,  AccessTag::None, VK_NULL_HANDLE);
+    m_RenderGraph.AddResource("GBufferDepth", true,  AccessTag::None, VK_NULL_HANDLE);
+    m_RenderGraph.AddResource("ShadowMap",    false, AccessTag::None, VK_NULL_HANDLE); // Transient (Pass 0 ~ Pass 1)
+    m_RenderGraph.AddResource("PostTempRT",   false, AccessTag::None, VK_NULL_HANDLE); // Transient (Pass 2: ShadowMap 메모리 오프셋을 Aliasing 재활용)
 
     // 2. 컴파일 타임 타입 태그(DepthStencilWriteTag, ColorAttachmentWriteTag, ReadOnlyTag) 기반 패스 접근 선언
     m_RenderGraph.AddPass("ShadowPass");
@@ -1206,15 +1205,15 @@ void VulkanBackend::SetupRenderGraph()
     });
     m_RenderGraph.DeclarePassAccess<ColorAttachmentWriteTag>("OpaquePass", "GBufferColor");
     m_RenderGraph.DeclarePassAccess<DepthStencilWriteTag>("OpaquePass", "GBufferDepth");
-    m_RenderGraph.DeclarePassAccess<ReadOnlyTag>("OpaquePass", "ShadowMap"); // Write -> Read 전이 배리어 자동 도출
+    m_RenderGraph.DeclarePassAccess<ReadOnlyTag>("OpaquePass", "ShadowMap");
 
     m_RenderGraph.AddPass("LightingPass");
-    m_RenderGraph.DeclarePassAccess<ReadOnlyTag>("LightingPass", "GBufferColor"); // Write -> Read 전이
-    m_RenderGraph.DeclarePassAccess<ReadOnlyTag>("LightingPass", "GBufferDepth"); // Write -> Read 전이
-    m_RenderGraph.DeclarePassAccess<ReadOnlyTag>("LightingPass", "ShadowMap");    // Read -> Read 연속 읽기이므로 배리어 자동 생략
-    m_RenderGraph.DeclarePassAccess<ColorAttachmentWriteTag>("LightingPass", "PostTempRT"); // ShadowMap과 수명이 안 겹치는 임시 타겟
+    m_RenderGraph.DeclarePassAccess<ReadOnlyTag>("LightingPass", "GBufferColor");
+    m_RenderGraph.DeclarePassAccess<ReadOnlyTag>("LightingPass", "GBufferDepth");
+    m_RenderGraph.DeclarePassAccess<ReadOnlyTag>("LightingPass", "ShadowMap");
+    m_RenderGraph.DeclarePassAccess<ColorAttachmentWriteTag>("LightingPass", "PostTempRT");
 
-    // 3. 그래프 컴파일: 해저드 병합(패스당 vkCmdPipelineBarrier 1회) 및 임시 자원 메모리 앨리어싱 수행
+    // 3. 그래프 컴파일: 해저드 병합 및 임시 자원 메모리 앨리어싱 수행
     m_RenderGraph.CompileGraph();
 
     std::cout << "[VulkanBackend] Render Graph setup complete. Barriers merged & transient memory aliased.\n";
