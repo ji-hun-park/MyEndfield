@@ -825,10 +825,10 @@ void VulkanBackend::CreateDescriptorResources()
         throw std::runtime_error("[VulkanBackend ERROR] Failed to create descriptor set layout 0!");
     }
 
-    // --- 2. Descriptor Set Layout 1: Material ---
+    // --- 2. Descriptor Set Layout 1: Material (Set 1 클러스터 바인딩용) ---
     VkDescriptorSetLayoutCreateInfo layoutInfo1{};
     layoutInfo1.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo1.bindingCount = 0;
+    layoutInfo1.bindingCount = 0; // 프로토타입 셰이더 호환을 위한 빈 레이아웃 핸들
 
     if (vkCreateDescriptorSetLayout(m_Device, &layoutInfo1, nullptr, &m_DescriptorSetLayout1_Material) != VK_SUCCESS) {
         throw std::runtime_error("[VulkanBackend ERROR] Failed to create descriptor set layout 1!");
@@ -884,6 +884,8 @@ void VulkanBackend::CreateDescriptorResources()
     vkMapMemory(m_Device, m_ObjectDynamicBufferMemory, 0, dynamicBufferSize, 0, &m_ObjectDynamicBufferMapped);
 
     // --- Descriptor Pool ---
+    constexpr uint32_t MAX_MATERIAL_SETS = 64; // 레바테인 19개 서브메시 머티리얼을 수용하는 버킷 크기
+
     std::vector<VkDescriptorPoolSize> poolSizes = {
         { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1 },         // Set 0
         { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1 }  // Set 2
@@ -893,13 +895,13 @@ void VulkanBackend::CreateDescriptorResources()
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
     poolInfo.pPoolSizes = poolSizes.data();
-    poolInfo.maxSets = 3;
+    poolInfo.maxSets = 2 + MAX_MATERIAL_SETS; // Set 0 (1개) + Set 2 (1개) + Set 1 (64개)
 
     if (vkCreateDescriptorPool(m_Device, &poolInfo, nullptr, &m_DescriptorPool) != VK_SUCCESS) {
         throw std::runtime_error("[VulkanBackend ERROR] Failed to create descriptor pool!");
     }
 
-    // --- Allocate & Update Set 0 ---
+    // --- Allocate & Update Set 0 (Global Pass) ---
     VkDescriptorSetAllocateInfo allocInfo0{};
     allocInfo0.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     allocInfo0.descriptorPool = m_DescriptorPool;
@@ -926,7 +928,21 @@ void VulkanBackend::CreateDescriptorResources()
 
     vkUpdateDescriptorSets(m_Device, 1, &descriptorWrite0, 0, nullptr);
 
-    // --- Allocate & Update Set 2 ---
+    // --- Allocate Set 1 (Material Sets: 64개 일괄 할당) ---
+    std::vector<VkDescriptorSetLayout> matLayouts(MAX_MATERIAL_SETS, m_DescriptorSetLayout1_Material);
+    m_MaterialSets.resize(MAX_MATERIAL_SETS, VK_NULL_HANDLE);
+
+    VkDescriptorSetAllocateInfo allocInfo1{};
+    allocInfo1.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo1.descriptorPool = m_DescriptorPool;
+    allocInfo1.descriptorSetCount = MAX_MATERIAL_SETS;
+    allocInfo1.pSetLayouts = matLayouts.data();
+
+    if (vkAllocateDescriptorSets(m_Device, &allocInfo1, m_MaterialSets.data()) != VK_SUCCESS) {
+        throw std::runtime_error("[VulkanBackend ERROR] Failed to allocate Material descriptor sets (Set 1)!");
+    }
+
+    // --- Allocate & Update Set 2 (Per-Draw Object Dynamic Offset) ---
     VkDescriptorSetAllocateInfo allocInfo2{};
     allocInfo2.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     allocInfo2.descriptorPool = m_DescriptorPool;
@@ -1015,6 +1031,7 @@ void VulkanBackend::Shutdown()
             vkDestroyDescriptorPool(m_Device, m_DescriptorPool, nullptr);
             m_DescriptorPool = VK_NULL_HANDLE;
         }
+        m_MaterialSets.clear(); // 풀 파괴 시 자동 해제된 Set 1 핸들 벡터 초기화
         if (m_CameraUniformBuffer) {
             vkDestroyBuffer(m_Device, m_CameraUniformBuffer, nullptr);
             m_CameraUniformBuffer = VK_NULL_HANDLE;

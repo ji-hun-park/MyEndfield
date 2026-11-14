@@ -16,6 +16,7 @@ namespace Endfield.Editor
         private int m_HeadlessCount = 50000;
         private int m_HeadlessIterations = 3;
         private bool m_HeadlessCulling = true;
+        private bool m_HeadlessOcclusionCulling = false;
         private List<BenchmarkTierResult> m_HeadlessResults = new List<BenchmarkTierResult>();
         private bool m_HasRunHeadless = false;
 
@@ -30,7 +31,7 @@ namespace Endfield.Editor
         public static void ShowWindow()
         {
             var window = GetWindow<BenchmarkEditorWindow>("Endfield Benchmark");
-            window.minSize = new Vector2(550, 520);
+            window.minSize = new Vector2(550, 540);
             window.Show();
         }
 
@@ -45,7 +46,7 @@ namespace Endfield.Editor
 
             EditorGUILayout.Space(6);
             EditorGUILayout.LabelField("Arknights: Endfield Benchmark Suite", EditorStyles.boldLabel);
-            EditorGUILayout.HelpBox("Verify and measure Custom C++ ECS, Parallel Culling, 128-bit SortKey, and Zero-Alloc Batching performance against the Unite Seoul 2026 target metrics.", MessageType.Info);
+            EditorGUILayout.HelpBox("Verify and measure Custom C++ ECS (128-bit Mask + POPCNT), View-Parallel Frustum & 3-Stage Software Occlusion Culling, 128-bit Branchless SIMD SortKey, and Zero-Alloc CAS Batching against the Unite Seoul 2026 target metrics.", MessageType.Info);
             EditorGUILayout.Space(4);
 
             m_SelectedTab = GUILayout.Toolbar(m_SelectedTab, m_TabTitles, GUILayout.Height(26));
@@ -70,7 +71,7 @@ namespace Endfield.Editor
         private void DrawHeadlessTab()
         {
             EditorGUILayout.LabelField("Native C++ Headless Stress Test", EditorStyles.boldLabel);
-            EditorGUILayout.LabelField("Executes pure C++ ECS, frustum culling, std::sort on 128-bit SortKey, and parallel worker batching without requiring a GPU window.");
+            EditorGUILayout.LabelField("Executes pure C++ SoA ECS, 15-worker frustum/occlusion culling, Branchless SIMD std::sort on 128-bit SortKey, and CAS worker batching without requiring a GPU window.");
             EditorGUILayout.Space(6);
 
             m_HeadlessCount = EditorGUILayout.IntSlider("Entity Count", m_HeadlessCount, 1000, 600000);
@@ -80,12 +81,17 @@ namespace Endfield.Editor
             if (GUILayout.Button("10K")) m_HeadlessCount = 10000;
             if (GUILayout.Button("50K")) m_HeadlessCount = 50000;
             if (GUILayout.Button("100K")) m_HeadlessCount = 100000;
+            if (GUILayout.Button("190K (10Kx19)")) m_HeadlessCount = 190000;
             if (GUILayout.Button("500K (Target)")) m_HeadlessCount = 500000;
             if (GUILayout.Button("600K (PC Limit)")) m_HeadlessCount = 600000;
             EditorGUILayout.EndHorizontal();
 
             m_HeadlessIterations = EditorGUILayout.IntSlider("Iterations", m_HeadlessIterations, 1, 10);
             m_HeadlessCulling = EditorGUILayout.Toggle("Enable Frustum Culling", m_HeadlessCulling);
+            using (new EditorGUI.DisabledScope(!m_HeadlessCulling))
+            {
+                m_HeadlessOcclusionCulling = EditorGUILayout.Toggle("Enable Occlusion Culling", m_HeadlessOcclusionCulling);
+            }
 
             EditorGUILayout.Space(10);
             if (GUILayout.Button($"RUN C++ HEADLESS BENCHMARK ({m_HeadlessCount:N0} ENTITIES)", GUILayout.Height(32)))
@@ -100,18 +106,22 @@ namespace Endfield.Editor
 
                 var r = m_HeadlessResults[0];
                 var s = r.nativeStats;
+                uint totalCulled = s.culledFrustum + s.culledOcclusion;
                 float cullRatio = s.totalInstances > 0 ? (1.0f - ((float)s.visibleInstances / s.totalInstances)) * 100.0f : 0.0f;
+                float totalCullTime = s.frustumCullingTimeMs + s.occlusionCullingTimeMs;
                 float sortAndBatchTime = s.sortingTimeMs + s.batchingTimeMs;
 
                 EditorGUILayout.BeginVertical(EditorStyles.helpBox);
                 EditorGUILayout.LabelField($"Total Candidates: {s.totalInstances:N0}");
-                EditorGUILayout.LabelField($"Surviving (Visible): {s.visibleInstances:N0} (Culled: {cullRatio:F1}%)");
+                EditorGUILayout.LabelField($"Surviving (Visible): {s.visibleInstances:N0} | Culled: {totalCulled:N0} (Frustum: {s.culledFrustum:N0}, Occlusion: {s.culledOcclusion:N0} / {cullRatio:F1}%)");
                 EditorGUILayout.Space(4);
-                EditorGUILayout.LabelField($"1. ECS Query SoA: {s.ecsQueryTimeMs:F3} ms");
-                EditorGUILayout.LabelField($"2. Frustum Culling: {s.frustumCullingTimeMs:F3} ms");
-                EditorGUILayout.LabelField($"3. 128-bit SortKey Sort: {s.sortingTimeMs:F3} ms");
-                EditorGUILayout.LabelField($"4. Parallel Batch & UBO Copy: {s.batchingTimeMs:F3} ms");
+                EditorGUILayout.LabelField($"1. ECS Query SoA (POPCNT): {s.ecsQueryTimeMs:F3} ms");
+                EditorGUILayout.LabelField($"2. Frustum Culling (15 Workers): {s.frustumCullingTimeMs:F3} ms");
+                EditorGUILayout.LabelField($"3. Software Occlusion Culling: {s.occlusionCullingTimeMs:F3} ms");
+                EditorGUILayout.LabelField($"4. 128-bit SortKey SIMD Sort: {s.sortingTimeMs:F3} ms");
+                EditorGUILayout.LabelField($"5. Parallel CAS Batch & UBO Copy: {s.batchingTimeMs:F3} ms");
                 EditorGUILayout.Space(4);
+                EditorGUILayout.LabelField($"Total CPU Culling Time: {totalCullTime:F3} ms (Target: < 0.5 ms @ 10K)");
                 EditorGUILayout.LabelField($"Sort + Batch Combined: {sortAndBatchTime:F3} ms (Endfield PC Target: ~1.0 ms)");
                 EditorGUILayout.LabelField($"Total Native Frame Time: {s.totalNativeFrameTimeMs:F3} ms");
                 EditorGUILayout.LabelField($"Theoretical Max Native FPS: {(s.totalNativeFrameTimeMs > 0 ? (1000.0f / s.totalNativeFrameTimeMs) : 0):F0} FPS");
@@ -130,6 +140,7 @@ namespace Endfield.Editor
         private void RunHeadlessTest()
         {
             m_HeadlessResults.Clear();
+            NativePluginWrapper.SetBenchmarkCullingOptions(m_HeadlessCulling, m_HeadlessCulling && m_HeadlessOcclusionCulling);
             NativePluginWrapper.RunNativeHeadlessBenchmark(m_HeadlessCount, m_HeadlessIterations, m_HeadlessCulling, out var averages);
 
             m_HeadlessResults.Add(new BenchmarkTierResult
@@ -174,7 +185,7 @@ namespace Endfield.Editor
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
             EditorGUILayout.LabelField($"Current FPS: {bm.CurrentFps:F0} (Avg: {bm.AverageFps:F0}, 1% Low: {bm.OnePercentLowFps:F0})");
             var s = bm.LatestNativeStats;
-            EditorGUILayout.LabelField($"Native Instances: {s.visibleInstances:N0} / {s.totalInstances:N0}");
+            EditorGUILayout.LabelField($"Native Instances: {s.visibleInstances:N0} / {s.totalInstances:N0} (Frustum Culled: {s.culledFrustum:N0}, Occlusion Culled: {s.culledOcclusion:N0})");
             EditorGUILayout.LabelField($"Native Total Frame Time: {s.totalNativeFrameTimeMs:F3} ms");
             EditorGUILayout.EndVertical();
 
@@ -260,4 +271,3 @@ namespace Endfield.Editor
         }
     }
 }
-

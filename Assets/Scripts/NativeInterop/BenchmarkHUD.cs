@@ -134,8 +134,8 @@ namespace Endfield.NativeInterop
 
             InitializeStyles();
 
-            float panelWidth = 360f;
-            float panelHeight = m_Manager.IsBenchmarkRunning ? 480f : 430f;
+            float panelWidth = 375f;
+            float panelHeight = m_Manager.IsBenchmarkRunning ? 495f : 445f;
             Rect panelRect = new Rect(15, 15, panelWidth, panelHeight);
 
             GUI.Box(panelRect, GUIContent.none, m_BoxStyle);
@@ -168,24 +168,26 @@ namespace Endfield.NativeInterop
 
             // Entity & Culling Metrics
             var s = m_Manager.LatestNativeStats;
+            uint totalCulled = s.culledFrustum + s.culledOcclusion;
             float cullPercent = s.totalInstances > 0 ? (1.0f - ((float)s.visibleInstances / s.totalInstances)) * 100.0f : 0.0f;
 
             GUILayout.Label($"Candidate Entities: {s.totalInstances:N0}", m_LabelStyle);
             GUILayout.BeginHorizontal();
-            GUILayout.Label($"Visible: {s.visibleInstances:N0}", m_MetricStyle, GUILayout.Width(130));
-            GUILayout.Label($"Culled: {s.culledFrustum + s.culledOcclusion:N0} ({cullPercent:F1}%)", m_HighlightStyle);
+            GUILayout.Label($"Visible: {s.visibleInstances:N0}", m_MetricStyle, GUILayout.Width(120));
+            GUILayout.Label($"Culled: {totalCulled:N0} ({cullPercent:F1}%)", m_HighlightStyle);
             GUILayout.EndHorizontal();
+            GUILayout.Label($"  └ Frustum: {s.culledFrustum:N0} | Occlusion: {s.culledOcclusion:N0}", m_LabelStyle);
 
             GUILayout.Space(6);
             GUILayout.Box(GUIContent.none, GUILayout.Height(1)); // Divider
 
             // Pipeline Breakdown
             GUILayout.Label("Native C++ Pipeline Timings:", m_HeaderStyle);
-            DrawMetricRow("1. ECS Query SoA:", $"{s.ecsQueryTimeMs:F3} ms");
-            DrawMetricRow("2. Frustum Culling:", $"{s.frustumCullingTimeMs:F3} ms");
-            DrawMetricRow("3. Occlusion Culling:", $"{s.occlusionCullingTimeMs:F3} ms");
-            DrawMetricRow("4. 128-bit SortKey Sort:", $"{s.sortingTimeMs:F3} ms");
-            DrawMetricRow("5. Parallel Batch & UBO:", $"{s.batchingTimeMs:F3} ms");
+            DrawMetricRow("1. ECS Query SoA (POPCNT):", $"{s.ecsQueryTimeMs:F3} ms");
+            DrawMetricRow("2. Frustum Culling (15T):", $"{s.frustumCullingTimeMs:F3} ms");
+            DrawMetricRow("3. Occlusion Culling (SIMD):", $"{s.occlusionCullingTimeMs:F3} ms");
+            DrawMetricRow("4. 128-bit SortKey SIMD Sort:", $"{s.sortingTimeMs:F3} ms");
+            DrawMetricRow("5. Parallel CAS Batch & UBO:", $"{s.batchingTimeMs:F3} ms");
             DrawMetricRow("6. Vulkan Submit:", $"{s.renderSubmitTimeMs:F3} ms");
             GUILayout.Space(3);
             DrawMetricRow(">> Total Native Frame:", $"{s.totalNativeFrameTimeMs:F3} ms", true);
@@ -237,10 +239,9 @@ namespace Endfield.NativeInterop
         private void DrawMetricRow(string label, string value, bool isHighlight = false)
         {
             GUILayout.BeginHorizontal();
-            GUILayout.Label(label, m_LabelStyle, GUILayout.Width(190));
+            GUILayout.Label(label, m_LabelStyle, GUILayout.Width(200));
             GUILayout.Label(value, isHighlight ? m_HighlightStyle : m_MetricStyle);
             GUILayout.EndHorizontal();
         }
     }
 }
-
