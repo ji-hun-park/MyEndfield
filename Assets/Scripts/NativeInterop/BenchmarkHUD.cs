@@ -184,7 +184,7 @@ namespace Endfield.NativeInterop
             DrawMetricRow("1. ECS Query SoA:", $"{s.ecsQueryTimeMs:F3} ms");
             DrawMetricRow("2. Frustum Culling:", $"{s.frustumCullingTimeMs:F3} ms");
             DrawMetricRow("3. Occlusion Culling:", $"{s.occlusionCullingTimeMs:F3} ms");
-            DrawMetricRow("4. 64-bit SortKey Sort:", $"{s.sortingTimeMs:F3} ms");
+            DrawMetricRow("4. 128-bit SortKey Sort:", $"{s.sortingTimeMs:F3} ms");
             DrawMetricRow("5. Parallel Batch & UBO:", $"{s.batchingTimeMs:F3} ms");
             DrawMetricRow("6. Vulkan Submit:", $"{s.renderSubmitTimeMs:F3} ms");
             GUILayout.Space(3);

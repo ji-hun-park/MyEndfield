@@ -70,7 +70,7 @@ std::vector<uint32_t> ComponentRegistry::GetIndicesFromMask(const ComponentMask&
 Chunk::Chunk(const ComponentMask& m) : mask(m), entityCount(0) {
     componentIndices = ComponentRegistry::GetIndicesFromMask(mask);
 
-    // [Chapter 1.1] SoA(Structure of Arrays) 컬럼별 64바이트 캐시 라인 정렬 할당
+    // SoA(Structure of Arrays) 컬럼별 64바이트 캐시 라인 정렬 할당
     columns.resize(componentIndices.size(), nullptr);
     for (size_t i = 0; i < componentIndices.size(); ++i) {
         size_t compSize = ComponentRegistry::GetComponentSize(componentIndices[i]);
@@ -179,7 +179,7 @@ Entity ECSManager::CreateEntity(const ComponentMask& mask) {
 }
 
 void ECSManager::DestroyEntity(Entity entity) {
-    // [Chapter 1.2 - 트릭 3] 워커 스레드의 청크 순회와 겹치지 않도록 잡 펜스 경계에서 실행
+    // 워커 스레드의 청크 순회와 겹치지 않도록 잡 펜스 경계에서 실행
     WaitJobFence();
 
     if (!IsValidEntity(entity)) return;
@@ -189,7 +189,7 @@ void ECSManager::DestroyEntity(Entity entity) {
     uint32_t deleteIndex = record.index;
     uint32_t lastIndex = chunk->entityCount - 1;
 
-    // [Chapter 1.2 - 트릭 3] Swap-Erase 상수 시간(O(1)) 삭제
+    // Swap-Erase 상수 시간(O(1)) 삭제
     if (deleteIndex != lastIndex) {
         Entity lastEntity = chunk->entityArray[lastIndex];
         chunk->entityArray[deleteIndex] = lastEntity;

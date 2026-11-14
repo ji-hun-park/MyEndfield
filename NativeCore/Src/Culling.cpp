@@ -158,7 +158,7 @@ void CullingSystem::PerformMultiViewFrustumCullingParallel(
     const uint32_t numChunks = static_cast<uint32_t>((totalEntities + batchSize - 1) / batchSize);
     const uint32_t activeWorkers = (std::min)(m_NumWorkers, numChunks);
 
-    // [Chapter 2.1] 데이터 흐름을 뒤집은 루프: for (Chunk) -> ChunkAABB 사전 컬링 -> for (Entity) -> Views 비트마스크 기록
+    // 데이터 흐름을 뒤집은 루프: for (Chunk) -> ChunkAABB 사전 컬링 -> for (Entity) -> Views 비트마스크 기록
     auto multiViewTask = [&](int workerID) {
         uint32_t chunksPerWorker = numChunks / activeWorkers;
         uint32_t startChunk = workerID * chunksPerWorker;
@@ -233,7 +233,7 @@ void CullingSystem::BatchOccluders(const std::vector<OccluderMesh>& occluders, c
         size_t triCount = mesh.indices.size() / 3;
         size_t t = 0;
 
-        // [Chapter 2.2 - Phase 1] 4-Wide SSE SIMD 배치 처리 (삼각형 4개씩 원근 분할, 백페이스 컬링, 뷰포트 매핑 동시 수행)
+        // 4-Wide SSE SIMD 배치 처리 (삼각형 4개씩 원근 분할, 백페이스 컬링, 뷰포트 매핑 동시 수행)
         for (; t + 3 < triCount; t += 4) {
             alignas(16) float cx0[4], cy0[4], cz0[4], cw0[4];
             alignas(16) float cx1[4], cy1[4], cz1[4], cw1[4];
@@ -353,7 +353,7 @@ void CullingSystem::RasterizeTilesParallel(float screenWidth, float screenHeight
     float scaleX = DEPTH_RES_X / screenWidth;
     float scaleY = DEPTH_RES_Y / screenHeight;
 
-    // [Chapter 2.2 - Phase 2] 4개의 비닝 잡이 8개 화면 타일에 대해 락 없이 총 32개(4x8)의 타일 리스트 생성
+    // 4개의 비닝 잡이 8개 화면 타일에 대해 락 없이 총 32개(4x8)의 타일 리스트 생성
     struct alignas(64) BinningJobList {
         std::vector<int> tileTriangles[NUM_TILES];
     };
@@ -398,8 +398,7 @@ void CullingSystem::RasterizeTilesParallel(float screenWidth, float screenHeight
 
     DispatchParallel(NUM_BINNING_JOBS, binningTask);
 
-    // [Chapter 2.2 - Phase 3] 8개의 렌더 잡이 8개 화면 타일을 1개씩(t = 0..7) 전담하여 락프리 래스터화 수행
-    // (기존 NUM_TILES / NUM_WORKERS == 0 정수 나눗셈 버그 완전 해결)
+    // 8개의 렌더 잡이 8개 화면 타일을 1개씩(t = 0..7) 전담하여 락프리 래스터화 수행
     auto rasterTask = [&](int tileIdx) {
         if (tileIdx < 0 || tileIdx >= NUM_TILES) return;
 
@@ -591,7 +590,7 @@ void CullingSystem::PerformOcclusionTestParallel(
             bool isVisible = false;
             __m128 nearestZVec = _mm_set1_ps(instanceNearestZ);
 
-            // [Chapter 2.2 - Phase 3] 4-Wide SSE SIMD 깊이 버퍼 비교
+            // 4-Wide SSE SIMD 깊이 버퍼 비교
             for (int y = startY; y <= endY && !isVisible; ++y) {
                 int rowOffset = y * DEPTH_RES_X;
                 int x = startX;

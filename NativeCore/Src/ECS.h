@@ -15,7 +15,7 @@ constexpr uint32_t MAX_COMPONENTS = 128; // 128-bit 마스크에 대응
 constexpr uint32_t CACHE_LINE_SIZE = 64; // CPU 캐시 라인 정렬 (64 Bytes)
 constexpr uint32_t MAX_INLINE_SUB_RENDERERS = 64; // 레바테인 19개 서브메시를 포인터 점프 없이 인라인 수납할 고정 버킷 크기
 
-// [Chapter 1.2 - Slide 29] 128-bit fixed mask for component types
+// 128-bit fixed mask for component types
 struct ComponentMask {
     uint64_t low = 0;
     uint64_t high = 0;
@@ -33,8 +33,8 @@ enum ComponentBitIndex : uint32_t {
     BIT_TRANSFORM     = 1,
     BIT_BOUNDS        = 2,
     BIT_MESH          = 3,
-    BIT_SUB_RENDERERS = 4, // [Chapter 1.1] 가변 길이 서브 렌더러 인라인 버킷 컬럼
-    BIT_VISIBILITY    = 5  // [Chapter 2.1] 32-bit 뷰 병렬 가시성 마스크 컬럼
+    BIT_SUB_RENDERERS = 4, // 가변 길이 서브 렌더러 인라인 버킷 컬럼
+    BIT_VISIBILITY    = 5  // 32-bit 뷰 병렬 가시성 마스크 컬럼
 };
 
 constexpr uint64_t MASK_TRANSFORM     = 1ULL << BIT_TRANSFORM;
@@ -61,7 +61,7 @@ struct MeshComponent {
     int32_t materialId;
 };
 
-// [Chapter 1.1 - Slide 27, 28] 외부 힙(std::vector) 포인터 점프 없이
+// 외부 힙(std::vector) 포인터 점프 없이
 // 캐릭터 1개의 19개 서브메시 렌더러 정보를 청크 내부 컬럼에 직접 인라인 수납하는 구조체
 struct alignas(64) InlineSubRendererComponent {
     uint32_t subMeshCount = 0; // 레바테인 기준 19
@@ -70,7 +70,7 @@ struct alignas(64) InlineSubRendererComponent {
     uint16_t materialIds[MAX_INLINE_SUB_RENDERERS] = {0};
 };
 
-// [Chapter 1.1 - Slide 28] 8-byte Generational Index Entity Handle
+// 8-byte Generational Index Entity Handle
 struct Entity {
     uint32_t id;
     uint32_t revision;
@@ -86,7 +86,7 @@ private:
     static size_t s_ComponentSizes[MAX_COMPONENTS];
 };
 
-// [Chapter 1.2 - 트릭 1] 하드웨어 POPCNT 명령어 래퍼
+// 하드웨어 POPCNT 명령어 래퍼
 inline uint32_t Popcnt64(uint64_t value) noexcept {
 #if defined(_MSC_VER)
     return static_cast<uint32_t>(__popcnt64(value));
@@ -112,8 +112,8 @@ struct alignas(64) Chunk {
 
     uint32_t AddEntity(Entity entity);
 
-    // [Chapter 1.2 - 트릭 1] 마스크가 곧 컬럼 주소다 (128-bit Mask + POPCNT 3사이클 O(1) 조회)
-    // unordered_map이나 for/switch 없이 하위 비트 마스크 AND 연산 후 POPCNT로 즉시 컬럼 인덱스를 계산합니다.
+    // 마스크가 곧 컬럼 주소 (128-bit Mask + POPCNT 3사이클 O(1) 조회)
+    // unordered_map이나 for/switch 없이 하위 비트 마스크 AND 연산 후 POPCNT로 즉시 컬럼 인덱스를 계산함
     static constexpr uint32_t INVALID_COLUMN = 0xFFFFFFFFu;
 
     inline uint32_t GetColumnIndexFast(uint32_t componentBitIndex) const noexcept {
@@ -149,7 +149,7 @@ public:
     ~ECSManager();
 
     Entity CreateEntity(const ComponentMask& mask);
-    void DestroyEntity(Entity entity); // [트릭 3] Swap-Erase O(1) 삭제 + 잡 펜스 보호
+    void DestroyEntity(Entity entity); // Swap-Erase O(1) 삭제 + 잡 펜스 보호
     void Clear();
 
     // 세대 인덱스(Revision) 일치 여부를 검사해 Use-After-Free(ABA 문제)를 방어하는 검증 함수
@@ -159,7 +159,7 @@ public:
         return (rec.chunk != nullptr) && (rec.revision == entity.revision);
     }
 
-    // [트릭 3] 워커 스레드 순회 보호용 경량 잡 펜스 제어
+    // 워커 스레드 순회 보호용 경량 잡 펜스 제어
     void AcquireWorkerReadFence() noexcept { m_ActiveWorkerJobs.fetch_add(1, std::memory_order_acquire); }
     void ReleaseWorkerReadFence() noexcept { m_ActiveWorkerJobs.fetch_sub(1, std::memory_order_release); }
     void WaitJobFence() const noexcept {
@@ -170,7 +170,7 @@ public:
 
     std::vector<Chunk*> QueryChunks(const ComponentMask& queryMask);
 
-    // [Chapter 1.2 - 트릭 1] POPCNT 기반 O(1) 컬럼 포인터 획득 (선형 탐색 루프 완전 제거)
+    // POPCNT 기반 O(1) 컬럼 포인터 획득 (선형 탐색 루프 완전 제거)
     template<typename T>
     T* GetComponentArray(Chunk* chunk, uint32_t componentBitIndex) const noexcept {
         if (!chunk) return nullptr;

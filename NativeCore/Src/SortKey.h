@@ -98,7 +98,7 @@ constexpr uint16_t MAX_DEPTH_VAL = 0xFFFF;
 class SortKeyBuilder {
 public:
     // 불투명(Opaque) 오브젝트용 키 생성: Front-to-Back 정렬 (가까운 것이 먼저)
-    // 기본 인자(meshID = 0, subMeshID = 0)를 통해 기존 4~5개 인자 호출 코드와 100% 호환
+    // 기본 인자(meshID = 0, subMeshID = 0)를 통해 기존 4~5개 인자 호출 코드와 호환
     static SortKey CreateOpaque(
         uint32_t passID,
         uint32_t pipelineID,

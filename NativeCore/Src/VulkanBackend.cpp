@@ -70,6 +70,7 @@ void VulkanBackend::Initialize(void* windowHandle)
         CreateDescriptorResources();
         CreateGraphicsPipeline();
         CreateSyncObjects();
+        SetupRenderGraph();
 
         // ThreadPool 주입 및 Vulkan Standard-Z(VK_COMPARE_OP_LESS, Clear 1.0f)에 맞춰 Reversed-Z 비활성화
         unsigned int workerCount = std::thread::hardware_concurrency();
@@ -1120,20 +1121,22 @@ void VulkanBackend::Shutdown()
 
 void VulkanBackend::SetupRenderGraph()
 {
-    // 이전 그래프 정보가 존재한다면 비우기
     m_RenderGraph.Clear();
 
-    // 1. Declare resources
-    m_RenderGraph.AddResource("GBufferColor", true, AccessTag::None);
-    m_RenderGraph.AddResource("GBufferDepth", true, AccessTag::None);
-    m_RenderGraph.AddResource("ShadowMap", false, AccessTag::None);
+    VkImage colorImg = !m_SwapchainImages.empty() ? m_SwapchainImages[0] : VK_NULL_HANDLE;
+    VkImage depthImg = m_DepthImage;
 
-    // 2. Declare passes and their resource accesses
+    // 1. 영속 자원(Persistent)과 수명 기반 임시 자원(Transient) 분리 선언
+    m_RenderGraph.AddResource("GBufferColor", true,  AccessTag::None, colorImg);
+    m_RenderGraph.AddResource("GBufferDepth", true,  AccessTag::None, depthImg, m_DepthImageView);
+    m_RenderGraph.AddResource("ShadowMap",    false, AccessTag::None, depthImg); // Transient (Pass 0 ~ Pass 1)
+    m_RenderGraph.AddResource("PostTempRT",   false, AccessTag::None, colorImg); // Transient (Pass 2: ShadowMap 메모리 오프셋을 Aliasing 재활용)
+
+    // 2. 컴파일 타임 타입 태그(DepthStencilWriteTag, ColorAttachmentWriteTag, ReadOnlyTag) 기반 패스 접근 선언
     m_RenderGraph.AddPass("ShadowPass");
-    m_RenderGraph.DeclarePassAccess("ShadowPass", "ShadowMap", AccessTag::DepthStencilWrite);
+    m_RenderGraph.DeclarePassAccess<DepthStencilWriteTag>("ShadowPass", "ShadowMap");
 
     m_RenderGraph.AddPass("OpaquePass", [this](VkCommandBuffer cmd) {
-        // OpaquePass 진입 시 실제 렌더 패스 실행 (배리어는 이미 적용됨)
         VkRenderPassBeginInfo renderPassInfo{};
         renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
         renderPassInfo.renderPass = m_RenderPass;
@@ -1156,8 +1159,8 @@ void VulkanBackend::SetupRenderGraph()
             VkViewport viewport{};
             viewport.x = 0.0f;
             viewport.y = 0.0f;
-            viewport.width = (float) m_SwapchainExtent.width;
-            viewport.height = (float) m_SwapchainExtent.height;
+            viewport.width = (float)m_SwapchainExtent.width;
+            viewport.height = (float)m_SwapchainExtent.height;
             viewport.minDepth = 0.0f;
             viewport.maxDepth = 1.0f;
             vkCmdSetViewport(cmd, 0, 1, &viewport);
@@ -1167,27 +1170,25 @@ void VulkanBackend::SetupRenderGraph()
             scissor.extent = m_SwapchainExtent;
             vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-            // 파이프라인이 바인딩되었을 때만 실제 드로우콜 수행
             ExecuteOpaqueDraws(cmd);
         }
 
         vkCmdEndRenderPass(cmd);
     });
-    m_RenderGraph.DeclarePassAccess("OpaquePass", "GBufferColor", AccessTag::ColorAttachmentWrite);
-    m_RenderGraph.DeclarePassAccess("OpaquePass", "GBufferDepth", AccessTag::DepthStencilWrite);
-    m_RenderGraph.DeclarePassAccess("OpaquePass", "ShadowMap", AccessTag::ShaderRead); // Needs transition!
+    m_RenderGraph.DeclarePassAccess<ColorAttachmentWriteTag>("OpaquePass", "GBufferColor");
+    m_RenderGraph.DeclarePassAccess<DepthStencilWriteTag>("OpaquePass", "GBufferDepth");
+    m_RenderGraph.DeclarePassAccess<ReadOnlyTag>("OpaquePass", "ShadowMap"); // Write -> Read 전이 배리어 자동 도출
 
     m_RenderGraph.AddPass("LightingPass");
-    m_RenderGraph.DeclarePassAccess("LightingPass", "GBufferColor", AccessTag::ShaderRead); // Needs transition!
-    m_RenderGraph.DeclarePassAccess("LightingPass", "GBufferDepth", AccessTag::ShaderRead); // Needs transition!
+    m_RenderGraph.DeclarePassAccess<ReadOnlyTag>("LightingPass", "GBufferColor"); // Write -> Read 전이
+    m_RenderGraph.DeclarePassAccess<ReadOnlyTag>("LightingPass", "GBufferDepth"); // Write -> Read 전이
+    m_RenderGraph.DeclarePassAccess<ReadOnlyTag>("LightingPass", "ShadowMap");    // Read -> Read 연속 읽기이므로 배리어 자동 생략
+    m_RenderGraph.DeclarePassAccess<ColorAttachmentWriteTag>("LightingPass", "PostTempRT"); // ShadowMap과 수명이 안 겹치는 임시 타겟
 
-    // 3. Compile the graph to merge barriers
+    // 3. 그래프 컴파일: 해저드 병합(패스당 vkCmdPipelineBarrier 1회) 및 임시 자원 메모리 앨리어싱 수행
     m_RenderGraph.CompileGraph();
 
-    // The merged barriers would now be used to generate explicit vkCmdPipelineBarrier calls
-    // exactly at the boundaries between passes.
-    
-    std::cout << "[VulkanBackend] Render Graph setup complete. Barriers merged at compile time.\n";
+    std::cout << "[VulkanBackend] Render Graph setup complete. Barriers merged & transient memory aliased.\n";
 }
 
 void VulkanBackend::UpdateCamera(float* viewMatrix, float* projMatrix)
@@ -1245,6 +1246,7 @@ void VulkanBackend::RecreateSwapchain() {
     CreateRenderPass();
     CreateGraphicsPipeline();
     CreateFramebuffers();
+    SetupRenderGraph();
 }
 
 bool VulkanBackend::BeginFrame()
@@ -1352,7 +1354,7 @@ void VulkanBackend::ExecuteOpaqueDraws(VkCommandBuffer cmdBuffer)
         );
     }
     
-    // --- [0] 128비트 정렬 키 및 Branchless SIMD std::sort (Slide [47]) ---
+    // --- [0] 128비트 정렬 키 및 Branchless SIMD std::sort
     m_SortedInstances.clear();
     m_SortedInstances.reserve(instanceCount);
     for (int i = 0; i < instanceCount; ++i) {
@@ -1381,7 +1383,7 @@ void VulkanBackend::ExecuteOpaqueDraws(VkCommandBuffer cmdBuffer)
                                 m_PipelineLayout, 0, 1, &m_DescriptorSet0_Pass, 0, nullptr);
     }
 
-    // --- [1] 워커 스레드 병렬 BatchData 생성 & 센티넬 마커(0x7F7F7F7F) 기록 (Slide [50]) ---
+    // --- [1] 워커 스레드 병렬 BatchData 생성 & 센티넬 마커(0x7F7F7F7F) 기록
     int visibleCount = static_cast<int>(m_SortedInstances.size());
     if (visibleCount > MAX_DYNAMIC_OBJECTS) {
         visibleCount = MAX_DYNAMIC_OBJECTS;
@@ -1423,7 +1425,7 @@ void VulkanBackend::ExecuteOpaqueDraws(VkCommandBuffer cmdBuffer)
                     cmd.subMeshIdx = data.subMeshIndex;
                     cmd.data = data;
 
-                    // [트릭 2] 워커 스레드가 자기 슬롯 오프셋의 영구 매핑(Persistent Mapped) GPU 버퍼에 직접 memcpy
+                    // 워커 스레드가 자기 슬롯 오프셋의 영구 매핑(Persistent Mapped) GPU 버퍼에 직접 memcpy
                     uint32_t dynamicOffset = static_cast<uint32_t>(i) * static_cast<uint32_t>(this->m_DynamicAlignment);
                     std::memcpy(
                          static_cast<char*>(this->m_ObjectDynamicBufferMapped) + dynamicOffset,
@@ -1438,7 +1440,7 @@ void VulkanBackend::ExecuteOpaqueDraws(VkCommandBuffer cmdBuffer)
 
         m_ThreadPool->WaitAll();
 
-        // --- [2] 싱글 렌더 스레드: 센티넬 뒤채움(Backfill) 및 클러스터 리바인드 생략 (Slide [47], [50]) ---
+        // --- [2] 싱글 렌더 스레드: 센티넬 뒤채움(Backfill) 및 클러스터 리바인드 생략
         uint32_t lastBoundMaterialSet = 0xFFFFFFFFu;
         uint32_t lastBoundMeshId      = 0xFFFFFFFFu;
 
@@ -1456,7 +1458,7 @@ void VulkanBackend::ExecuteOpaqueDraws(VkCommandBuffer cmdBuffer)
                                                 m_PipelineLayout, 1, 1, &m_MaterialSets[cmd.materialID], 0, nullptr);
                     }
                 } else {
-                    // 직전 드로우와 동일한 머티리얼 클러스터: 뒤채움만 수행하고 vkCmdBindDescriptorSets(Set 1) 생략!
+                    // 직전 드로우와 동일한 머티리얼 클러스터: 뒤채움만 수행하고 vkCmdBindDescriptorSets(Set 1) 생략
                     cmd.descriptorSetPlaceholder = lastBoundMaterialSet;
                 }
             }
@@ -1468,7 +1470,7 @@ void VulkanBackend::ExecuteOpaqueDraws(VkCommandBuffer cmdBuffer)
                                         m_PipelineLayout, 2, 1, &m_DescriptorSet2_Object, 1, &dynamicOffset);
             }
 
-            // 3) 메시 버퍼 클러스터링: 직전 드로우와 동일한 원본 메시(meshId)면 Vertex/Index Buffer 리바인드 생략!
+            // 3) 메시 버퍼 클러스터링: 직전 드로우와 동일한 원본 메시(meshId)면 Vertex/Index Buffer 리바인드 생략
             if (cmd.meshId < m_Meshes.size()) {
                 MeshBuffer& mesh = m_Meshes[cmd.meshId];
                 if (mesh.vertexBuffer && mesh.indexBuffer && cmd.subMeshIdx < mesh.subMeshes.size()) {

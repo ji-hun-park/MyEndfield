@@ -48,10 +48,10 @@ public:
     void SetThreadPool(ThreadPool* threadPool) { m_ThreadPool = threadPool; }
     void SetReversedZ(bool useReversedZ) { m_UseReversedZ = useReversedZ; }
 
-    // [Chapter 2.1] 단일 뷰 프러스텀 컬링 (기존 호환용 - 내부 Data Race 수정됨)
+    // 단일 뷰 프러스텀 컬링 (기존 호환용 - 내부 Data Race 수정됨)
     void PerformFrustumCullingParallel(const Frustum& frustum, const std::vector<AABB>& aabbs, std::vector<bool>& outVisibility);
 
-    // [Chapter 2.1] 뷰 병렬(Multi-View) 프러스텀 컬링 & 청크 AABB 사전 컬링 (32비트 비트마스크 기록)
+    // 뷰 병렬(Multi-View) 프러스텀 컬링 & 청크 AABB 사전 컬링 (32비트 비트마스크 기록)
     void PerformMultiViewFrustumCullingParallel(
         const Frustum* frustums,
         uint32_t viewCount,
@@ -60,13 +60,13 @@ public:
         const std::vector<AABB>& entityAABBs,
         std::vector<uint32_t>& outVisibilityMasks);
 
-    // [Chapter 2.2 - Phase 1] 4-Wide SIMD 오클루더 배치 및 화면 공간 삼각형 변환
+    // 4-Wide SIMD 오클루더 배치 및 화면 공간 삼각형 변환
     void BatchOccluders(const std::vector<OccluderMesh>& occluders, const float* vpMatrix, float screenWidth, float screenHeight);
 
-    // [Chapter 2.2 - Phase 2 & 3] 4x2 타일 비닝(32개 리스트) 및 8개 잡 락프리 타일 래스터화
+    // 4x2 타일 비닝(32개 리스트) 및 8개 잡 락프리 타일 래스터화
     void RasterizeTilesParallel(float screenWidth, float screenHeight);
 
-    // [Chapter 2.2 - Phase 3] SIMD Hi-Z 깊이 비교 및 최종 가시성 판정
+    // SIMD Hi-Z 깊이 비교 및 최종 가시성 판정
     void PerformOcclusionTestParallel(
         const float* vpMatrix,
         const float* modelMatrices,
