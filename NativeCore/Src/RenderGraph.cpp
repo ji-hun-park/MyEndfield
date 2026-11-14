@@ -140,7 +140,25 @@ void RenderGraph::ComputeTransientMemoryAliasing()
         }
     }
 
-    // 2. 임시 자원(!isPersistent)만 모아 수명이 겹치지 않는 메모리 블록(Slot)을 재활용(Aliasing)
+    // 2. 임시 자원(!isPersistent)만 추출하여 시작 패스(firstPassIndex) 오름차순으로 정렬
+    // (std::unordered_map의 해시 순회 순서로 인해 뒷 패스 자원이 먼저 할당되는 버그 방지)
+    std::vector<RenderResource*> transientResources;
+    for (auto& kv : m_Resources) {
+        RenderResource& res = kv.second;
+        if (!res.isPersistent && res.firstPassIndex != -1) {
+            transientResources.push_back(&res);
+        }
+    }
+
+    std::sort(transientResources.begin(), transientResources.end(),
+        [](const RenderResource* a, const RenderResource* b) {
+            if (a->firstPassIndex != b->firstPassIndex) {
+                return a->firstPassIndex < b->firstPassIndex;
+            }
+            return a->name < b->name;
+        });
+
+    // 3. 수명이 끝난 메모리 블록(Slot)을 후속 임시 자원이 재활용(Aliasing)
     struct MemorySlot {
         VkDeviceSize offset;
         VkDeviceSize size;
@@ -149,26 +167,22 @@ void RenderGraph::ComputeTransientMemoryAliasing()
     std::vector<MemorySlot> activeSlots;
     VkDeviceSize currentHeapEnd = 0;
 
-    for (auto& kv : m_Resources) {
-        RenderResource& res = kv.second;
-        // 영속 자원(Persistent)이거나 프레임 내 미사용 자원은 임시 풀 앨리어싱에서 제외
-        if (res.isPersistent || res.firstPassIndex == -1) continue;
-
+    for (RenderResource* res : transientResources) {
         bool aliased = false;
         for (auto& slot : activeSlots) {
-            // 이전 임시 자원의 마지막 사용 패스(occupiedUntilPass)가 끝난 뒤에 시작하고 크기가 충분하면 오프셋 재활용
-            if (slot.occupiedUntilPass < res.firstPassIndex && slot.size >= res.memorySize) {
-                res.aliasedMemoryOffset = slot.offset;
-                slot.occupiedUntilPass  = res.lastPassIndex;
+            // 이전 임시 자원의 마지막 사용 패스(occupiedUntilPass) 이후에 등장하고 크기가 충분하면 오프셋 재활용
+            if (slot.occupiedUntilPass < res->firstPassIndex && slot.size >= res->memorySize) {
+                res->aliasedMemoryOffset = slot.offset;
+                slot.occupiedUntilPass   = res->lastPassIndex;
                 aliased = true;
                 break;
             }
         }
 
         if (!aliased) {
-            res.aliasedMemoryOffset = currentHeapEnd;
-            activeSlots.push_back({ currentHeapEnd, res.memorySize, res.lastPassIndex });
-            currentHeapEnd += res.memorySize;
+            res->aliasedMemoryOffset = currentHeapEnd;
+            activeSlots.push_back({ currentHeapEnd, res->memorySize, res->lastPassIndex });
+            currentHeapEnd += res->memorySize;
         }
     }
 

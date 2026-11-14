@@ -261,7 +261,7 @@ TEST(BenchmarkTests, Chapter5_SortComparison_And_StateRebindReduction) {
 }
 
 // ============================================================================
-// 4. [Chapter 3 & 4] 렌더 그래프 컴파일 타임 태그, Read->Read 생략, 메모리 앨리어싱 검증
+// 4. 렌더 그래프 컴파일 타임 태그, Read->Read 생략, 메모리 앨리어싱 검증
 // ============================================================================
 TEST(BenchmarkTests, Chapter3_RenderGraph_BarrierMerging_And_Aliasing) {
     RenderGraph graph;
@@ -269,29 +269,42 @@ TEST(BenchmarkTests, Chapter3_RenderGraph_BarrierMerging_And_Aliasing) {
     VkImage dummyDepth = reinterpret_cast<VkImage>(0x1002);
 
     graph.AddResource("GBufferColor", true,  AccessTag::None, dummyColor);
+    graph.AddResource("GBufferDepth", true,  AccessTag::None, dummyDepth);
+    // 임시 자원 2개 (각 8MB): 수명이 겹치지 않을 때 총 16MB가 아닌 8MB만 사용하는지 검증
     graph.AddResource("ShadowMap",    false, AccessTag::None, dummyDepth, VK_NULL_HANDLE, VK_NULL_HANDLE, 8ULL * 1024 * 1024);
     graph.AddResource("PostTempRT",   false, AccessTag::None, dummyColor, VK_NULL_HANDLE, VK_NULL_HANDLE, 8ULL * 1024 * 1024);
 
+    // Pass 0: ShadowMap 쓰기 (ShadowMap 수명 시작: 0)
     graph.AddPass("ShadowPass");
     graph.DeclarePassAccess<DepthStencilWriteTag>("ShadowPass", "ShadowMap");
 
+    // Pass 1: GBufferColor/Depth 쓰기 + ShadowMap 읽기
     graph.AddPass("OpaquePass");
     graph.DeclarePassAccess<ColorAttachmentWriteTag>("OpaquePass", "GBufferColor");
+    graph.DeclarePassAccess<DepthStencilWriteTag>("OpaquePass", "GBufferDepth");
     graph.DeclarePassAccess<ReadOnlyTag>("OpaquePass", "ShadowMap");
 
+    // Pass 2: GBufferColor/Depth 읽기(배리어 2개 병합) + ShadowMap 연속 읽기(Read->Read 배리어 생략 ShadowMap 수명 종료: 2)
     graph.AddPass("LightingPass");
-    graph.DeclarePassAccess<ReadOnlyTag>("LightingPass", "GBufferColor");
-    graph.DeclarePassAccess<ReadOnlyTag>("LightingPass", "ShadowMap"); // Read -> Read 연속 읽기 배리어 자동 생략
-    graph.DeclarePassAccess<ColorAttachmentWriteTag>("LightingPass", "PostTempRT");
+    graph.DeclarePassAccess<ReadOnlyTag>("LightingPass", "GBufferColor"); // Write -> Read (배리어 1)
+    graph.DeclarePassAccess<ReadOnlyTag>("LightingPass", "GBufferDepth"); // Write -> Read (배리어 2)
+    graph.DeclarePassAccess<ReadOnlyTag>("LightingPass", "ShadowMap");    // Read  -> Read (배리어 자동 생략)
+
+    // Pass 3: ShadowMap 수명(0~2)이 완전히 끝난 뒤 PostTempRT 쓰기 (수명: 3~3 -> ShadowMap 오프셋 0 재활용)
+    graph.AddPass("PostProcessPass");
+    graph.DeclarePassAccess<ColorAttachmentWriteTag>("PostProcessPass", "PostTempRT");
 
     graph.CompileGraph();
 
+    // 1. LightingPass에서 3개 자원을 선언했지만 ShadowMap(Read->Read)이 생략되어 2개 배리어만 병합되었는지 확인
     EXPECT_EQ(graph.GetMergedBarrierCountForPass("LightingPass"), 2u);
 
+    // 2. ShadowMap(Pass 0~2) 수명 종료 후 PostTempRT(Pass 3)가 오프셋 0을 재활용(Aliasing)해 총 임시 메모리가 8MB인지 확인
     const RenderResource* shadowRes = graph.GetResourceInfo("ShadowMap");
     const RenderResource* postRes   = graph.GetResourceInfo("PostTempRT");
     ASSERT_NE(shadowRes, nullptr);
     ASSERT_NE(postRes, nullptr);
-    EXPECT_EQ(shadowRes->aliasedMemoryOffset, postRes->aliasedMemoryOffset);
+    EXPECT_EQ(shadowRes->aliasedMemoryOffset, 0ULL);
+    EXPECT_EQ(postRes->aliasedMemoryOffset, 0ULL);
     EXPECT_EQ(graph.GetTotalAliasedTransientMemorySize(), 8ULL * 1024 * 1024);
 }
