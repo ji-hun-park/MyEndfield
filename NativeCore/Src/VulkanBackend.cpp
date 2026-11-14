@@ -1395,7 +1395,7 @@ void VulkanBackend::ExecuteOpaqueDraws(VkCommandBuffer cmdBuffer)
     if (m_IntermediateCmds.size() < static_cast<size_t>(visibleCount)) {
         m_IntermediateCmds.resize(visibleCount);
     }
-    constexpr uint32_t SENTINEL_MARKER = 0x7F7F7F7F;
+    constexpr uint32_t SENTINEL_MARKER = 0xF7F7F7F7;
 
     unsigned int numThreads = std::thread::hardware_concurrency();
     numThreads = (numThreads > 1) ? (numThreads - 1) : 4; // 15 Workers
@@ -1417,7 +1417,7 @@ void VulkanBackend::ExecuteOpaqueDraws(VkCommandBuffer cmdBuffer)
                     const InstanceData& data = sortedInstances[i];
                     IntermediateDrawCmd cmd;
 
-                    // 워커는 직전 드로우의 디스크립터 셋 상태를 알 수 없으므로 0x7F7F7F7F 센티넬 마커를 기입
+                    // 워커는 직전 드로우의 디스크립터 셋 상태를 알 수 없으므로 0xF7F7F7F7 센티넬 마커를 기입
                     cmd.descriptorSetPlaceholder = SENTINEL_MARKER;
                     cmd.materialID = data.sortKey.materialID;
                     // 128비트 키의 meshID 우선 사용 (기존 64비트 씬 호환을 위해 0일 경우 pipelineID 폴백)
@@ -1447,7 +1447,7 @@ void VulkanBackend::ExecuteOpaqueDraws(VkCommandBuffer cmdBuffer)
         for (int i = 0; i < visibleCount; ++i) {
             IntermediateDrawCmd& cmd = m_IntermediateCmds[i];
 
-            // 1) Set 1 (Material): 센티넬 마커(0x7F7F7F7F) 뒤채움 및 중복 바인드 생략
+            // 1) Set 1 (Material): 센티넬 마커(0xF7F7F7F7) 뒤채움 및 중복 바인드 생략
             if (cmd.descriptorSetPlaceholder == SENTINEL_MARKER) {
                 if (cmd.materialID != lastBoundMaterialSet) {
                     lastBoundMaterialSet = cmd.materialID;

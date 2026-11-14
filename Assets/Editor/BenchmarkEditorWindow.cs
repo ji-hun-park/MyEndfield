@@ -45,7 +45,7 @@ namespace Endfield.Editor
 
             EditorGUILayout.Space(6);
             EditorGUILayout.LabelField("Arknights: Endfield Benchmark Suite", EditorStyles.boldLabel);
-            EditorGUILayout.HelpBox("Verify and measure Custom C++ ECS, Parallel Culling, 64-bit SortKey, and Zero-Alloc Batching performance against the Unite Seoul 2026 target metrics.", MessageType.Info);
+            EditorGUILayout.HelpBox("Verify and measure Custom C++ ECS, Parallel Culling, 128-bit SortKey, and Zero-Alloc Batching performance against the Unite Seoul 2026 target metrics.", MessageType.Info);
             EditorGUILayout.Space(4);
 
             m_SelectedTab = GUILayout.Toolbar(m_SelectedTab, m_TabTitles, GUILayout.Height(26));
@@ -70,7 +70,7 @@ namespace Endfield.Editor
         private void DrawHeadlessTab()
         {
             EditorGUILayout.LabelField("Native C++ Headless Stress Test", EditorStyles.boldLabel);
-            EditorGUILayout.LabelField("Executes pure C++ ECS, frustum culling, std::sort on 64-bit SortKey, and parallel worker batching without requiring a GPU window.");
+            EditorGUILayout.LabelField("Executes pure C++ ECS, frustum culling, std::sort on 128-bit SortKey, and parallel worker batching without requiring a GPU window.");
             EditorGUILayout.Space(6);
 
             m_HeadlessCount = EditorGUILayout.IntSlider("Entity Count", m_HeadlessCount, 1000, 600000);
@@ -109,7 +109,7 @@ namespace Endfield.Editor
                 EditorGUILayout.Space(4);
                 EditorGUILayout.LabelField($"1. ECS Query SoA: {s.ecsQueryTimeMs:F3} ms");
                 EditorGUILayout.LabelField($"2. Frustum Culling: {s.frustumCullingTimeMs:F3} ms");
-                EditorGUILayout.LabelField($"3. 64-bit SortKey Sort: {s.sortingTimeMs:F3} ms");
+                EditorGUILayout.LabelField($"3. 128-bit SortKey Sort: {s.sortingTimeMs:F3} ms");
                 EditorGUILayout.LabelField($"4. Parallel Batch & UBO Copy: {s.batchingTimeMs:F3} ms");
                 EditorGUILayout.Space(4);
                 EditorGUILayout.LabelField($"Sort + Batch Combined: {sortAndBatchTime:F3} ms (Endfield PC Target: ~1.0 ms)");
