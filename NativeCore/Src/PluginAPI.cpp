@@ -1,17 +1,24 @@
+#define NOMINMAX
 #include "PluginAPI.h"
 #include "VulkanBackend.h"
 #include "ECS.h"
 #include "Culling.h"
 #include "SceneLoader.h"
+#include "SortKey.h"
+#include "ThreadPool.h"
 #include <memory>
 #include <iostream>
 #include <cstdlib>
 #include <mutex>
 #include <cmath>
+#include <algorithm>
+#include <limits>
+#include <vector>
 
 static std::unique_ptr<Endfield::VulkanBackend> g_Backend = nullptr;
 static std::unique_ptr<Endfield::ECSManager> g_ECS = nullptr;
 static std::unique_ptr<Endfield::CullingSystem> g_Culling = nullptr;
+static std::unique_ptr<Endfield::ThreadPool> g_CullingThreadPool = nullptr;
 static std::mutex g_NativeMutex;
 
 #if defined(_WIN32) || defined(_WIN64)
@@ -135,17 +142,25 @@ ENDFIELD_API void InitializeVulkanRenderer(void* windowHandle, uint32_t width, u
         // Bit 0: Pinned Pointer (float*) for Unity bridging
         Endfield::ComponentRegistry::RegisterComponent(0, sizeof(float*));
         // Bit 1: TransformComponent (64 bytes)
-        Endfield::ComponentRegistry::RegisterComponent(1, sizeof(Endfield::TransformComponent));
+        Endfield::ComponentRegistry::RegisterComponent(Endfield::BIT_TRANSFORM, sizeof(Endfield::TransformComponent));
         // Bit 2: BoundsComponent (24 bytes)
-        Endfield::ComponentRegistry::RegisterComponent(2, sizeof(Endfield::BoundsComponent));
+        Endfield::ComponentRegistry::RegisterComponent(Endfield::BIT_BOUNDS, sizeof(Endfield::BoundsComponent));
         // Bit 3: MeshComponent (12 bytes)
-        Endfield::ComponentRegistry::RegisterComponent(3, sizeof(Endfield::MeshComponent));
+        Endfield::ComponentRegistry::RegisterComponent(Endfield::BIT_MESH, sizeof(Endfield::MeshComponent));
+        // Bit 4: InlineSubRendererComponent
+        Endfield::ComponentRegistry::RegisterComponent(Endfield::BIT_SUB_RENDERERS, sizeof(Endfield::InlineSubRendererComponent));
+        // Bit 5: Visibility bitmask (uint32_t)
+        Endfield::ComponentRegistry::RegisterComponent(Endfield::BIT_VISIBILITY, sizeof(uint32_t));
     }
     
     if (!g_Culling) {
+        // Ryzen 7 7700(16논리 코어) 기준 15개 워커 스레드 풀 생성 및 주입
+        uint32_t hwThreads = std::thread::hardware_concurrency();
+        uint32_t numWorkers = (hwThreads > 1) ? (hwThreads - 1) : 4;
+        g_CullingThreadPool = std::make_unique<Endfield::ThreadPool>(numWorkers);
+
         g_Culling = std::make_unique<Endfield::CullingSystem>();
-        // 하드웨어 동시성(코어 수) 기반으로 멀티스레딩 워커 갯수 자동 초기화
-        g_Culling->Initialize(0); 
+        g_Culling->Initialize(numWorkers, g_CullingThreadPool.get(), false);
     }
 }
 
@@ -160,6 +175,7 @@ ENDFIELD_API void ShutdownVulkanRenderer()
         g_Culling->Shutdown();
         g_Culling.reset();
     }
+    g_CullingThreadPool.reset();
     g_ECS.reset();
     if (g_Backend) {
         g_Backend->Shutdown();
@@ -177,8 +193,8 @@ ENDFIELD_API void ShutdownVulkanRenderer()
 #endif
 }
 
-static float g_ViewMatrix[16];
-static float g_ProjMatrix[16];
+static float g_ViewMatrix[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
+static float g_ProjMatrix[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
 
 ENDFIELD_API void ExecuteNativeRenderLoop()
 {
@@ -186,10 +202,7 @@ ENDFIELD_API void ExecuteNativeRenderLoop()
     try {
 #if defined(_WIN32) || defined(_WIN64)
         if (g_WindowShouldClose.load() && !g_WindowSafeToDestroy.load()) {
-            // Signal Vulkan Backend to stop using the surface and cleanup if necessary
             if (g_Backend) {
-                // We shouldn't destroy backend completely here because Unity might call ShutdownVulkanRenderer later
-                // Wait for the device to be idle before destroying the window, to ensure no Vulkan queues are using the surface
                 g_Backend->WaitDeviceIdle();
                 g_WindowSafeToDestroy = true;
                 if (g_StandaloneWindow) {
@@ -199,14 +212,12 @@ ENDFIELD_API void ExecuteNativeRenderLoop()
             return;
         }
         if (g_WindowShouldClose.load()) {
-            return; // Skip rendering
+            return;
         }
 #endif
         Endfield::BenchmarkManager::Instance().BeginFrame();
 
-        if (g_Backend) {
-            if (g_Backend->BeginFrame()) {
-            
+        if (g_Backend && g_Backend->BeginFrame()) {
             if (g_ECS && g_Culling) {
                 auto& stats = Endfield::BenchmarkManager::Instance().GetCurrentFrameStats();
                 Endfield::ComponentMask mask;
@@ -218,11 +229,11 @@ ENDFIELD_API void ExecuteNativeRenderLoop()
                     chunks = g_ECS->QueryChunks(mask);
                 }
                 
-                // ViewProj Matrix 계산
+                // View-Projection 행렬 계산
                 float vp[16];
                 for (int c = 0; c < 4; ++c) {
                     for (int r = 0; r < 4; ++r) {
-                        vp[c * 4 + r] = 0;
+                        vp[c * 4 + r] = 0.0f;
                         for (int k = 0; k < 4; ++k) {
                             vp[c * 4 + r] += g_ProjMatrix[k * 4 + r] * g_ViewMatrix[c * 4 + k];
                         }
@@ -232,51 +243,122 @@ ENDFIELD_API void ExecuteNativeRenderLoop()
                 Endfield::Frustum frustum;
                 frustum.ExtractFromMatrix(vp);
 
-                // ECS의 SoA 청크 메모리를 직접 참조하여 컬링 및 인스턴스 배열 조립
-                std::vector<Endfield::VulkanBackend::InstanceData> visibleInstances;
                 uint32_t totalEntities = 0;
+                for (auto* chunk : chunks) {
+                    totalEntities += chunk->entityCount;
+                }
+
+                std::vector<Endfield::VulkanBackend::InstanceData> visibleInstances;
+                visibleInstances.reserve(totalEntities);
                 uint32_t culledFrustum = 0;
                 bool enableFrustum = Endfield::BenchmarkManager::Instance().IsFrustumCullingEnabled();
 
                 {
                     Endfield::ScopedTimer timer(&stats.frustumCullingTimeMs);
-                    for (auto chunk : chunks) {
-                        auto* transforms = g_ECS->GetComponentArray<Endfield::TransformComponent>(chunk, Endfield::BIT_TRANSFORM);
-                        auto* bounds = g_ECS->GetComponentArray<Endfield::BoundsComponent>(chunk, Endfield::BIT_BOUNDS);
-                        auto* meshes = g_ECS->GetComponentArray<Endfield::MeshComponent>(chunk, Endfield::BIT_MESH);
-                        
-                        if (!transforms || !bounds || !meshes) continue;
-                        totalEntities += chunk->entityCount;
 
-                        // 1. Chunk 내 뷰 프러스텀 컬링 (배열 기반이므로 캐시 친화적)
-                        for (uint32_t i = 0; i < chunk->entityCount; ++i) {
-                            Endfield::AABB aabb = { 
-                                {bounds[i].minBounds[0], bounds[i].minBounds[1], bounds[i].minBounds[2]},
-                                {bounds[i].maxBounds[0], bounds[i].maxBounds[1], bounds[i].maxBounds[2]}
-                            };
+                    // 워커 스레드 순회 중 구조적 변경(DestroyEntity 등)을 막기 위한 경량 잡 펜스 획득
+                    g_ECS->AcquireWorkerReadFence();
 
-                            bool isVisible = true;
-                            if (enableFrustum) {
-                                isVisible = frustum.Intersects(aabb);
-                            }
+                    if (totalEntities > 0) {
+                        constexpr uint32_t CULL_BATCH_SIZE = 256;
+                        uint32_t numCullChunks = (totalEntities + CULL_BATCH_SIZE - 1) / CULL_BATCH_SIZE;
 
-                            if (isVisible) {
-                                Endfield::VulkanBackend::InstanceData inst;
-                                for (int k = 0; k < 16; ++k) {
-                                    inst.mvpMatrix[k] = transforms[i].localToWorld[k];
+                        std::vector<Endfield::AABB> entityAABBs(totalEntities);
+                        std::vector<Endfield::AABB> chunkAABBs(numCullChunks);
+
+                        for (uint32_t c = 0; c < numCullChunks; ++c) {
+                            chunkAABBs[c].minBounds[0] = std::numeric_limits<float>::max();
+                            chunkAABBs[c].minBounds[1] = std::numeric_limits<float>::max();
+                            chunkAABBs[c].minBounds[2] = std::numeric_limits<float>::max();
+                            chunkAABBs[c].maxBounds[0] = std::numeric_limits<float>::lowest();
+                            chunkAABBs[c].maxBounds[1] = std::numeric_limits<float>::lowest();
+                            chunkAABBs[c].maxBounds[2] = std::numeric_limits<float>::lowest();
+                        }
+
+                        // 1. SoA 청크에서 Bounds 컬럼을 읽어 엔티티 AABB 및 월드 청크 AABB 구성
+                        uint32_t writeIdx = 0;
+                        for (auto* chunk : chunks) {
+                            auto* bounds = g_ECS->GetComponentArray<Endfield::BoundsComponent>(chunk, Endfield::BIT_BOUNDS);
+                            if (!bounds) continue;
+
+                            for (uint32_t i = 0; i < chunk->entityCount; ++i) {
+                                Endfield::AABB box = {
+                                    { bounds[i].minBounds[0], bounds[i].minBounds[1], bounds[i].minBounds[2] },
+                                    { bounds[i].maxBounds[0], bounds[i].maxBounds[1], bounds[i].maxBounds[2] }
+                                };
+                                entityAABBs[writeIdx] = box;
+
+                                uint32_t batchIdx = writeIdx / CULL_BATCH_SIZE;
+                                for (int axis = 0; axis < 3; ++axis) {
+                                    chunkAABBs[batchIdx].minBounds[axis] = (std::min)(chunkAABBs[batchIdx].minBounds[axis], box.minBounds[axis]);
+                                    chunkAABBs[batchIdx].maxBounds[axis] = (std::max)(chunkAABBs[batchIdx].maxBounds[axis], box.maxBounds[axis]);
                                 }
-                                inst.sortKey.value = 0;
-                                inst.sortKey.materialID = static_cast<uint16_t>(meshes[i].materialId);
-                                inst.sortKey.pipelineID = static_cast<uint16_t>(meshes[i].meshId);
-                                inst.sortKey.depth = 0;
-                                inst.subMeshIndex = static_cast<uint32_t>(meshes[i].subMeshIndex);
-                                
-                                visibleInstances.push_back(inst);
-                            } else {
-                                culledFrustum++;
+                                writeIdx++;
+                            }
+                        }
+
+                        // 2. 15개 워커 스레드 뷰 병렬 프러스텀 컬링 & 청크 AABB 사전 컬링
+                        std::vector<uint32_t> visMasks;
+                        if (enableFrustum) {
+                            g_Culling->PerformMultiViewFrustumCullingParallel(
+                                &frustum,
+                                1,
+                                chunkAABBs.data(),
+                                CULL_BATCH_SIZE,
+                                entityAABBs,
+                                visMasks
+                            );
+                        }
+
+                        // 3. 비트마스크 판별(vis & (1u << 0)) 및 128-bit SortKey 조립
+                        uint32_t readIdx = 0;
+                        for (auto* chunk : chunks) {
+                            auto* transforms = g_ECS->GetComponentArray<Endfield::TransformComponent>(chunk, Endfield::BIT_TRANSFORM);
+                            auto* meshes     = g_ECS->GetComponentArray<Endfield::MeshComponent>(chunk, Endfield::BIT_MESH);
+                            auto* visColumn  = g_ECS->GetComponentArray<uint32_t>(chunk, Endfield::BIT_VISIBILITY);
+
+                            if (!transforms || !meshes) continue;
+
+                            for (uint32_t i = 0; i < chunk->entityCount; ++i, ++readIdx) {
+                                uint32_t vis = enableFrustum ? visMasks[readIdx] : 1u;
+                                if (visColumn) {
+                                    visColumn[i] = vis;
+                                }
+
+                                // 카메라별 비트 연산 한 번으로 가시성 판별
+                                if ((vis & (1u << 0)) != 0u) {
+                                    Endfield::VulkanBackend::InstanceData inst;
+                                    for (int k = 0; k < 16; ++k) {
+                                        inst.mvpMatrix[k] = transforms[i].localToWorld[k];
+                                    }
+
+                                    // 뷰 공간 Z 깊이(거리) 근사 계산
+                                    float dx = transforms[i].localToWorld[12] + g_ViewMatrix[12];
+                                    float dy = transforms[i].localToWorld[13] + g_ViewMatrix[13];
+                                    float dz = transforms[i].localToWorld[14] + g_ViewMatrix[14];
+                                    float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+
+                                    // 128-bit SortKey 생성 (Pass -> Pipeline -> Mesh/Submesh -> Material/Depth)
+                                    inst.sortKey = Endfield::SortKeyBuilder::CreateOpaque(
+                                        0u,                                              // passID
+                                        1u,                                              // pipelineID (PSO)
+                                        static_cast<uint16_t>(meshes[i].materialId),     // materialID
+                                        dist,                                            // distance
+                                        Endfield::DEFAULT_MAX_SORT_DISTANCE,
+                                        static_cast<uint16_t>(meshes[i].meshId),         // meshID
+                                        static_cast<uint16_t>(meshes[i].subMeshIndex)    // subMeshID
+                                    );
+                                    inst.subMeshIndex = static_cast<uint32_t>(meshes[i].subMeshIndex);
+
+                                    visibleInstances.push_back(inst);
+                                } else {
+                                    culledFrustum++;
+                                }
                             }
                         }
                     }
+
+                    g_ECS->ReleaseWorkerReadFence();
                 }
 
                 stats.totalInstances = totalEntities;
@@ -284,13 +366,11 @@ ENDFIELD_API void ExecuteNativeRenderLoop()
                 stats.visibleInstances = static_cast<uint32_t>(visibleInstances.size());
 
                 if (!visibleInstances.empty()) {
-                    // 그래프의 커맨드 큐에 Draw Call 등록
                     g_Backend->SubmitBatch(visibleInstances.data(), static_cast<int>(visibleInstances.size()));
                 }
-            } // close if (g_ECS && g_Culling)
+            }
 
             g_Backend->EndFrame();
-            }
         }
         Endfield::BenchmarkManager::Instance().EndFrame();
     } catch (const std::exception& e) {
@@ -323,10 +403,7 @@ ENDFIELD_API void RegisterEntity(uint32_t id, float* transformData)
         Endfield::ComponentMask mask;
         mask.low = 1; // Transform 컴포넌트(Bit 0)를 가짐
 
-        // ECS에 엔티티 할당
         Endfield::Entity ent = g_ECS->CreateEntity(mask);
-        
-        // Pinned된 Unity의 transformData 포인터를 직접 ECS 컴포넌트에 저장합니다.
         g_ECS->SetComponentData<float*>(ent, 0, transformData);
         
         std::cout << "[PluginAPI] Registered Entity ID " << id << " with Transform Data ptr: " << transformData << std::endl;
@@ -345,7 +422,6 @@ ENDFIELD_API void UpdateCameraState(float* viewMatrix, float* projMatrix)
     }
 }
 
-
 struct SpawnTemplateData {
     Endfield::TransformComponent t;
     Endfield::BoundsComponent b;
@@ -363,7 +439,6 @@ ENDFIELD_API void LoadNativeScene(const char* path)
         std::vector<Endfield::SceneLoader::TemplateData> templates;
         if (Endfield::SceneLoader::LoadScene(filePath, *g_ECS, meshes, templates)) {
             for (size_t i = 0; i < meshes.size(); ++i) {
-                // Cast SceneLoader::Vertex to VulkanBackend::Vertex
                 const auto& mesh = meshes[i];
                 std::vector<Endfield::VulkanBackend::Vertex> vkVertices;
                 vkVertices.reserve(mesh.vertices.size());
@@ -393,7 +468,6 @@ ENDFIELD_API void SpawnNativeInstances(int count, float spread)
     std::lock_guard<std::mutex> lock(g_NativeMutex);
     if (!g_ECS) return;
 
-    // 만약 g_SpawnTemplates가 비어있다면 (하위 호환) ECS 청크에서 템플릿 추출
     if (g_SpawnTemplates.empty()) {
         Endfield::ComponentMask mask;
         mask.low = Endfield::MASK_STANDARD_RENDER;
@@ -413,11 +487,10 @@ ENDFIELD_API void SpawnNativeInstances(int count, float spread)
     if (g_SpawnTemplates.empty()) return;
     g_SpawnTemplateSize = static_cast<uint32_t>(g_SpawnTemplates.size());
 
-    // 정확한 측정을 위해 기존 인스턴스(최초 1개 템플릿 포함)를 모두 정리
     g_ECS->Clear();
 
     Endfield::ComponentMask mask;
-    mask.low = Endfield::MASK_STANDARD_RENDER;
+    mask.low = Endfield::MASK_STANDARD_RENDER | Endfield::MASK_VISIBILITY;
 
     for (int i = 0; i < count; ++i) {
         float offsetX = ((float)rand() / RAND_MAX) * spread - (spread * 0.5f);
@@ -427,7 +500,6 @@ ENDFIELD_API void SpawnNativeInstances(int count, float spread)
             Endfield::TransformComponent newT = tpl.t;
             Endfield::BoundsComponent newB = tpl.b;
             
-            // Unity column-major matrix
             newT.localToWorld[12] += offsetX;
             newT.localToWorld[14] += offsetZ;
 
@@ -437,9 +509,9 @@ ENDFIELD_API void SpawnNativeInstances(int count, float spread)
             newB.maxBounds[2] += offsetZ;
 
             Endfield::Entity ent = g_ECS->CreateEntity(mask);
-            g_ECS->SetComponentData(ent, 1, newT);
-            g_ECS->SetComponentData(ent, 2, newB);
-            g_ECS->SetComponentData(ent, 3, tpl.m);
+            g_ECS->SetComponentData(ent, Endfield::BIT_TRANSFORM, newT);
+            g_ECS->SetComponentData(ent, Endfield::BIT_BOUNDS, newB);
+            g_ECS->SetComponentData(ent, Endfield::BIT_MESH, tpl.m);
         }
     }
 }
@@ -459,22 +531,15 @@ ENDFIELD_API void AnimateNativeInstances(float time, float deltaTime)
         
         if (transforms && bounds) {
             for (uint32_t i = 0; i < chunk->entityCount; ++i) {
-                // 엔티티 ID를 템플릿 개수(서브매시 개수)로 나누어 같은 캐릭터(그룹)인지 판별
                 uint32_t entityId = chunk->entityArray[i].id;
                 uint32_t groupId = entityId / g_SpawnTemplateSize;
 
-                // 같은 그룹은 동일한 phaseOffset을 가짐 -> 찢어지지 않고 통째로 움직임
                 float phaseOffset = static_cast<float>(groupId) * 0.1f;
-                
-                // y = A * sin(time + phase)
-                // dy = A * cos(time + phase) * dt
                 float amplitude = 2.0f;
                 float deltaY = amplitude * cosf(time + phaseOffset) * deltaTime;
 
-                // Unity Transform Matrix: Translation은 인덱스 12, 13, 14에 저장됩니다. (x, y, z)
                 transforms[i].localToWorld[13] += deltaY;
 
-                // Bounds(AABB)도 동일하게 이동시켜 프러스텀 컬링이 정상 동작하게 합니다.
                 bounds[i].minBounds[1] += deltaY;
                 bounds[i].maxBounds[1] += deltaY;
             }
@@ -482,4 +547,4 @@ ENDFIELD_API void AnimateNativeInstances(float time, float deltaTime)
     }
 }
 
-}
+} // extern "C"
