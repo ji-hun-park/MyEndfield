@@ -38,6 +38,17 @@ namespace Endfield.NativeInterop
         [DllImport(pluginName)]
         public static extern void AnimateNativeInstances(float time, float deltaTime);
 
+        [StructLayout(LayoutKind.Sequential, Pack = 16)]
+        public struct InstanceData
+        {
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 16)]
+            public float[] mvpMatrix;   // 64 Bytes (Offset 0..63)
+            public ulong sortKeyLow;    // 8 Bytes  (Offset 64..71: Depth 16b | Material 16b | SubMesh 16b | Mesh 16b)
+            public ulong sortKeyHigh;   // 8 Bytes  (Offset 72..79: PipelineID 32b | PassID 32b)
+            public uint subMeshIndex;   // 4 Bytes  (Offset 80..83)
+            private uint _pad0, _pad1, _pad2; // 12 Bytes Tail Padding for 16-byte alignment (Total 96 Bytes)
+        }
+
         [StructLayout(LayoutKind.Sequential)]
         public struct NativeBenchmarkStats
         {

@@ -1352,121 +1352,133 @@ void VulkanBackend::ExecuteOpaqueDraws(VkCommandBuffer cmdBuffer)
         );
     }
     
-    // 이후 로직은 정렬된 배열을 기반으로 진행합니다.
+    // --- [0] 128비트 정렬 키 및 Branchless SIMD std::sort (Slide [47]) ---
+    m_SortedInstances.clear();
+    m_SortedInstances.reserve(instanceCount);
+    for (int i = 0; i < instanceCount; ++i) {
+        if (i < static_cast<int>(visibilityResults.size()) && visibilityResults[i]) {
+            m_SortedInstances.push_back(instances[i]);
+        }
+    }
+
+    benchmarkStats.visibleInstances = static_cast<uint32_t>(m_SortedInstances.size());
+    benchmarkStats.culledOcclusion = static_cast<uint32_t>(instanceCount - m_SortedInstances.size());
+
+    {
+        ScopedTimer timer(&benchmarkStats.sortingTimeMs);
+        // SSE2 _mm_load_si128 + _mm_cmpgt_epi32 + _mm_movemask_ps 기반 분기 없는(Branchless) 비교자 주입
+        std::sort(m_SortedInstances.begin(), m_SortedInstances.end(),
+            [](const InstanceData& a, const InstanceData& b) noexcept {
+                return SortKey::LessSIMD(a.sortKey, b.sortKey);
+            });
+    }
+
     const InstanceData* sortedInstances = m_SortedInstances.data();
 
-    // Endfield Architecture: Descriptor sets are separated by frequency of update
-    // Set 0: Per Pass (Lighting, Camera, Shadows)
-    // Set 1: Per Material (Textures, Constants)
-    // Set 2: Per Draw (Object matrices via Dynamic Offset)
-
-    // E.g., Bind Set 0 (Per Pass) once per batch/pass
+    // Set 0 (Global Camera/Light): 패스당 단 1회만 바인드
     if (m_PipelineLayout != VK_NULL_HANDLE && m_DescriptorSet0_Pass != VK_NULL_HANDLE) {
-        vkCmdBindDescriptorSets(cmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, 
+        vkCmdBindDescriptorSets(cmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 m_PipelineLayout, 0, 1, &m_DescriptorSet0_Pass, 0, nullptr);
     }
 
-    // --- [1] 워커 스레드의 병렬 커맨드 빌드 단계 (Simulated) ---
-    // 워커는 다른 워커가 어떤 머티리얼을 바인딩했는지 알 수 없으므로,
-    // 일단 0x7F7F7F7F라는 플레이스홀더를 사용하여 디스크립터 바인딩 예약을 생성합니다.
-
+    // --- [1] 워커 스레드 병렬 BatchData 생성 & 센티넬 마커(0x7F7F7F7F) 기록 (Slide [50]) ---
     int visibleCount = static_cast<int>(m_SortedInstances.size());
     if (visibleCount > MAX_DYNAMIC_OBJECTS) {
         visibleCount = MAX_DYNAMIC_OBJECTS;
         LogToUnity("[VulkanBackend WARNING] Too many instances! Truncated to " + std::to_string(MAX_DYNAMIC_OBJECTS) + ".");
     }
-    
+
+    if (visibleCount == 0) return;
+
     if (m_IntermediateCmds.size() < static_cast<size_t>(visibleCount)) {
         m_IntermediateCmds.resize(visibleCount);
     }
-    const uint32_t PLACEHOLDER_BINDING = 0x7F7F7F7F;
+    constexpr uint32_t SENTINEL_MARKER = 0x7F7F7F7F;
 
     unsigned int numThreads = std::thread::hardware_concurrency();
-    if (numThreads == 0) numThreads = 4;
+    numThreads = (numThreads > 1) ? (numThreads - 1) : 4; // 15 Workers
     if (numThreads > static_cast<unsigned int>(visibleCount)) {
         numThreads = static_cast<unsigned int>(visibleCount);
     }
-    
-    if (numThreads == 0) return; // Prevent div by 0 if visibleCount is 0
 
-    int chunkSize = visibleCount / numThreads;
+    int chunkSize = visibleCount / static_cast<int>(numThreads);
 
     {
         ScopedTimer timer(&benchmarkStats.batchingTimeMs);
 
         for (unsigned int t = 0; t < numThreads; ++t) {
-            int startIdx = t * chunkSize;
+            int startIdx = static_cast<int>(t) * chunkSize;
             int endIdx = (t == numThreads - 1) ? visibleCount : startIdx + chunkSize;
 
-            m_ThreadPool->Enqueue([startIdx, endIdx, sortedInstances, this, PLACEHOLDER_BINDING]() {
+            m_ThreadPool->Enqueue([startIdx, endIdx, sortedInstances, this, SENTINEL_MARKER]() {
                 for (int i = startIdx; i < endIdx; ++i) {
                     const InstanceData& data = sortedInstances[i];
                     IntermediateDrawCmd cmd;
-                    
-                    cmd.descriptorSetPlaceholder = PLACEHOLDER_BINDING;
+
+                    // 워커는 직전 드로우의 디스크립터 셋 상태를 알 수 없으므로 0x7F7F7F7F 센티넬 마커를 기입
+                    cmd.descriptorSetPlaceholder = SENTINEL_MARKER;
                     cmd.materialID = data.sortKey.materialID;
-                    cmd.meshId = data.sortKey.pipelineID;
+                    // 128비트 키의 meshID 우선 사용 (기존 64비트 씬 호환을 위해 0일 경우 pipelineID 폴백)
+                    cmd.meshId = (data.sortKey.meshID != 0) ? data.sortKey.meshID : data.sortKey.pipelineID;
                     cmd.subMeshIdx = data.subMeshIndex;
                     cmd.data = data;
-                    
+
+                    // [트릭 2] 워커 스레드가 자기 슬롯 오프셋의 영구 매핑(Persistent Mapped) GPU 버퍼에 직접 memcpy
+                    uint32_t dynamicOffset = static_cast<uint32_t>(i) * static_cast<uint32_t>(this->m_DynamicAlignment);
+                    std::memcpy(
+                         static_cast<char*>(this->m_ObjectDynamicBufferMapped) + dynamicOffset,
+                         &data,
+                         sizeof(InstanceData)
+                    );
+
                     this->m_IntermediateCmds[i] = cmd;
                 }
             });
         }
 
-        // 워커 스레드가 커맨드 빌드를 모두 마칠 때까지 대기
         m_ThreadPool->WaitAll();
 
-        // --- [2] 최종 정리(Finalize) 단계 ---
-        // 정렬(Sort)이 완료된 상태에서 순차적으로 커맨드를 순회하며 중복 바인딩을 제거(Skip)합니다.
-
-        VkViewport viewport{};
-        viewport.x = 0.0f;
-        viewport.y = 0.0f;
-        viewport.width = (float)m_SwapchainExtent.width;
-        viewport.height = (float)m_SwapchainExtent.height;
-        viewport.minDepth = 0.0f;
-        viewport.maxDepth = 1.0f;
-        vkCmdSetViewport(cmdBuffer, 0, 1, &viewport);
-
-        VkRect2D scissor{};
-        scissor.offset = {0, 0};
-        scissor.extent = m_SwapchainExtent;
-        vkCmdSetScissor(cmdBuffer, 0, 1, &scissor);
-
-        uint32_t lastBoundMaterialSet = 0xFFFFFFFF; // 매 프레임/드로우콜 배치 시작 시 상태 캐시 리셋!
+        // --- [2] 싱글 렌더 스레드: 센티넬 뒤채움(Backfill) 및 클러스터 리바인드 생략 (Slide [47], [50]) ---
+        uint32_t lastBoundMaterialSet = 0xFFFFFFFFu;
+        uint32_t lastBoundMeshId      = 0xFFFFFFFFu;
 
         for (int i = 0; i < visibleCount; ++i) {
             IntermediateDrawCmd& cmd = m_IntermediateCmds[i];
 
-            // 상태 캐싱: 이전 인스턴스와 같은 머티리얼(파이프라인 상태)이라면 바인딩 생략
-            if (cmd.materialID != lastBoundMaterialSet) {
-                cmd.descriptorSetPlaceholder = cmd.materialID; // 실제 바인딩 ID로 리졸브(Resolve)
-                lastBoundMaterialSet = cmd.materialID;
-                
-                if (cmd.materialID < m_MaterialSets.size() && m_MaterialSets[cmd.materialID] != VK_NULL_HANDLE) {
-                    vkCmdBindDescriptorSets(cmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, 
-                                            m_PipelineLayout, 1, 1, &m_MaterialSets[cmd.materialID], 0, nullptr);
+            // 1) 센티넬 마커(0x7F7F7F7F) 발견 시 직전 유효 핸들로 뒤채움(Backfill) 및 중복 바인드 생략
+            if (cmd.descriptorSetPlaceholder == SENTINEL_MARKER) {
+                if (cmd.materialID != lastBoundMaterialSet) {
+                    lastBoundMaterialSet = cmd.materialID;
+                    cmd.descriptorSetPlaceholder = lastBoundMaterialSet;
+
+                    if (cmd.materialID < m_MaterialSets.size() && m_MaterialSets[cmd.materialID] != VK_NULL_HANDLE) {
+                        vkCmdBindDescriptorSets(cmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                                m_PipelineLayout, 1, 1, &m_MaterialSets[cmd.materialID], 0, nullptr);
+                    }
+                } else {
+                    // 직전 드로우와 동일한 머티리얼 클러스터: 뒤채움만 수행하고 vkCmdBindDescriptorSets(Set 1) 생략!
+                    cmd.descriptorSetPlaceholder = lastBoundMaterialSet;
                 }
             }
 
-            // --- [3] Copy to Dynamic Uniform Buffer ---
-            // Instead of Push Constants, copy data to mapped buffer and bind descriptor set 2
-            uint32_t dynamicOffset = i * static_cast<uint32_t>(m_DynamicAlignment);
-            memcpy(reinterpret_cast<char*>(m_ObjectDynamicBufferMapped) + dynamicOffset, &cmd.data, sizeof(InstanceData));
-
+            // 2) Set 2 (Per-Draw Object): 단일 디스크립터 셋에 Dynamic Offset만 이동
+            uint32_t dynamicOffset = static_cast<uint32_t>(i) * static_cast<uint32_t>(m_DynamicAlignment);
             if (m_PipelineLayout != VK_NULL_HANDLE && m_DescriptorSet2_Object != VK_NULL_HANDLE) {
-                vkCmdBindDescriptorSets(cmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, 
+                vkCmdBindDescriptorSets(cmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                         m_PipelineLayout, 2, 1, &m_DescriptorSet2_Object, 1, &dynamicOffset);
             }
 
+            // 3) 메시 버퍼 클러스터링: 직전 드로우와 동일한 원본 메시(meshId)면 Vertex/Index Buffer 리바인드 생략!
             if (cmd.meshId < m_Meshes.size()) {
                 MeshBuffer& mesh = m_Meshes[cmd.meshId];
                 if (mesh.vertexBuffer && mesh.indexBuffer && cmd.subMeshIdx < mesh.subMeshes.size()) {
-                    VkBuffer vertexBuffers[] = {mesh.vertexBuffer};
-                    VkDeviceSize offsets[] = {0};
-                    vkCmdBindVertexBuffers(cmdBuffer, 0, 1, vertexBuffers, offsets);
-                    vkCmdBindIndexBuffer(cmdBuffer, mesh.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+                    if (cmd.meshId != lastBoundMeshId) {
+                        VkBuffer vertexBuffers[] = { mesh.vertexBuffer };
+                        VkDeviceSize offsets[] = { 0 };
+                        vkCmdBindVertexBuffers(cmdBuffer, 0, 1, vertexBuffers, offsets);
+                        vkCmdBindIndexBuffer(cmdBuffer, mesh.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+                        lastBoundMeshId = cmd.meshId;
+                    }
 
                     const SubMeshBuffer& subMesh = mesh.subMeshes[cmd.subMeshIdx];
                     vkCmdDrawIndexed(cmdBuffer, subMesh.indexCount, 1, subMesh.firstIndex, 0, 0);
