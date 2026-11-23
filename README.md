@@ -1,7 +1,7 @@
 **"Vulkan 기반 자체 렌더 파이프라인 엔진"**
 
-![그림01](https://ji-hun-park.github.io/assets/images/엔드필드001.png "그림01"){: .align-center}
-![그림02](https://ji-hun-park.github.io/assets/images/엔드필드002.png "그림02"){: .align-center}
+![그림01](https://ji-hun-park.github.io/assets/images/엔드필드001.png "그림01")
+![그림02](https://ji-hun-park.github.io/assets/images/엔드필드002.png "그림02")
 **별도의 창에서 렌더링되며 움직이는 만 개의 고밀도 모델들**
 
 ## 0. Links
@@ -16,7 +16,7 @@ Unite Seoul 2026에서 들은 HyperGryph의 Tech Lead이신 Will Fei님의 강�
 실제 명일방주: 엔드필드의 파이프라인 구조를 모방해보는 경험을 해봤습니다.
 
 **시스템 흐름도**  
-![시스템 흐름도](https://ji-hun-park.github.io/assets/images/엔드필드000.png "Game Logic Flow"){: .align-center}
+![시스템 흐름도](https://ji-hun-park.github.io/assets/images/엔드필드000.png "Game Logic Flow")
 
 ### 📋프로젝트 정보
 
@@ -49,8 +49,8 @@ Unity 엔진은 보통 윈도우의 Directx11에서 구동이 됩니다.
 이를 Vulkan으로 전환하는 기능과 이를 위한 인터페이스들이 존재하지만  
 저는 자체적으로 개발했습니다.
 
-![그림03](https://ji-hun-park.github.io/assets/images/엔드필드003.png "그림03"){: .align-center}
-![그림04](https://ji-hun-park.github.io/assets/images/엔드필드004.png "그림04"){: .align-center}
+![그림03](https://ji-hun-park.github.io/assets/images/엔드필드003.png "그림03")
+![그림04](https://ji-hun-park.github.io/assets/images/엔드필드004.png "그림04")
 **자체 Vulkan 파이프라인 생성 구조**
 
 DLL Plugin을 통해 제가 자체 제작한 Custum Vulkan이 탑재된  
@@ -123,18 +123,18 @@ CompileGraph() 호출 시 컴파일 타임에 접근 마스크를 모아서
 
 5.테스트 및 벤치마크
 
-![그림05](https://ji-hun-park.github.io/assets/images/엔드필드005.png "그림05"){: .align-center}
+![그림05](https://ji-hun-park.github.io/assets/images/엔드필드005.png "그림05")
 
 그 밖에 여러 예외 처리나 검증을 위해 Google Test를 통해 단위 테스트도 진행을 했습니다.
 
-![그림06](https://ji-hun-park.github.io/assets/images/엔드필드006.png "그림06"){: .align-center}
+![그림06](https://ji-hun-park.github.io/assets/images/엔드필드006.png "그림06")
 
 최종적으로 스포너를 통해 10,000 개의 FBX(각 서브 메쉬 19개로 구성)를 스폰해 프레임 안정적으로 렌더링하는데 성공했습니다.  
 이는 총 19만 개의 메시와 폴리곤(삼각형) 약 21억 개, 정점 약 18억 개로 이루어져 있습니다.
 
-![그림07](https://ji-hun-park.github.io/assets/images/엔드필드007.png "그림07"){: .align-center}
+![그림07](https://ji-hun-park.github.io/assets/images/엔드필드007.png "그림07")
 
-![그림08](https://ji-hun-park.github.io/assets/images/엔드필드008.png "그림08"){: .align-center}
+![그림08](https://ji-hun-park.github.io/assets/images/엔드필드008.png "그림08")
 
 또한 성능 비교를 위해 현재 버전과 Unity DOTS, Burst, Job 시스템을 이용하고  
 유니티에서 자체 지원하는 Vulkan API를 이용하는 버전과 그냥 OOP 및 URP와 GPU Instancing을 사용하는 버전을  
